@@ -2,7 +2,7 @@
 
 **Version:** 1.0  
 **Date:** November 2025  
-**Status:** Production Ready
+**Status:** Alpha (Testing and Updates are welcome)
 
 ---
 
