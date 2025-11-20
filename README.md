@@ -12,6 +12,32 @@ A fully-featured personal AI assistant with local LLM, secure P2P collaboration,
 - 📖 **Adaptive Learning** - Style adaptation & LoRA fine-tuning
 - 🛡️ **Sandboxed Code Execution** - Safe Python code execution
 
+A privacy-first AI assistant that runs entirely on your computer - no cloud, no data sharing, no third-party APIs.
+
+Core Features:
+
+Local AI Brain: Multiple AI models you can switch between (small/fast or large/smart)
+Smart Memory: Remembers facts with your approval, searches past conversations
+Proactive Helpers: Background agents that suggest actions (clipboard monitoring, knowledge suggestions)
+Multi-Device Sync: Securely connect your own devices with end-to-end encryption
+Learning System: Gets better over time from your feedback
+Web Interface: Easy-to-use chat UI in your browser
+Key Design Principles:
+
+Privacy: Everything stored locally in SQLite databases
+Control: You approve what it remembers
+Extensible: Tool system for calculations, web search, code execution
+Secure: Optional P2P collaboration uses military-grade encryption with explicit consent
+Reliable: Can run 24/7 in headless mode, packages as standalone app
+Architecture Highlights:
+
+Async Python throughout for responsiveness
+ReAct reasoning loop for tool use
+CRDT for distributed memory sync across devices
+Consent tokens for collaboration security
+WAL-mode SQLite for data integrity
+Think of it as: Your personal ChatGPT that lives on your computer, remembers what you tell it, can connect your devices securely, and never sends your data anywhere.
+
 ## Quick Start
 
 ```bash
