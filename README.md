@@ -12,6 +12,7 @@ A fully-featured personal AI assistant with local LLM, secure P2P collaboration,
 - 📖 **Adaptive Learning** - Style adaptation & LoRA fine-tuning
 - 🛡️ **Sandboxed Code Execution** - Safe Python code execution
 
+
 A privacy-first AI assistant that runs entirely on your computer - no cloud, no data sharing, no third-party APIs.
 
 Core Features:
