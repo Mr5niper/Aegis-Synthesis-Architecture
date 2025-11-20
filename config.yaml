@@ -1,0 +1,46 @@
+models:
+  - name: "default"
+    url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf?download=true"
+    path: "models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+    sha256: ""
+    ctx_size: 4096
+    n_gpu_layers: 0
+  
+  - name: "large"
+    url: "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf"
+    path: "models/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf"
+    sha256: ""
+    ctx_size: 8192
+    n_gpu_layers: 0
+
+assistant:
+  system_prompt: "You are Aegis, a powerful and helpful personal AI assistant. Use ReAct: Think, decide on a tool if needed via JSON, act, observe, iterate, and finally answer concisely with sources when applicable."
+  max_reasoning_steps: 5
+  allow_web_search: true
+  tool_timeout_sec: 20
+  proactive_enabled: true
+  quiet_hours: [23, 7] # 11 PM to 7 AM
+  suggestions_per_min: 5
+  allow_domains: ["wikipedia.org", "pypi.org", "python.org", "arxiv.org", "numpy.org", "pytorch.org"]
+  allow_code_exec: false
+
+user_profile:
+  enabled: true
+  path: "data/user_data/profile.json"
+
+learning:
+  lora_training: true
+  min_corrections_for_training: 50
+  training_output_dir: "data/training"
+
+embeddings:
+  model_name: "sentence-transformers/all-MiniLM-L6-v2"
+
+paths:
+  conversation_db: "data/conversations/history.db"
+  knowledge_base_db: "data/kb/knowledge.db"
+  web_cache_db: "data/kb/web_cache.db"
+  memory_graph_db: "data/user_data/memory_graph.db"
+  inbox_db: "data/user_data/inbox.db"
+  contacts_db: "data/keys/contacts.db"
+  keys_dir: "data/keys"

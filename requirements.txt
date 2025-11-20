@@ -1,0 +1,33 @@
+# Core LLM & Embeddings (Python 3.13 compatible versions)
+llama-cpp-python>=0.3.2
+sentence-transformers>=2.7.0
+numpy>=2.0.0
+torch>=2.3.0
+transformers>=4.45.0
+scikit-learn>=1.5.0
+scipy>=1.11.0
+
+# Web & Tools
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+duckduckgo-search>=6.2.0
+
+# Config & Schemas
+pydantic>=2.7.0
+pyyaml>=6.0.0
+
+# UI
+gradio>=4.29.0
+
+# Build
+PyInstaller>=6.7.0
+
+# Proactive Agents
+pyperclip>=1.8.0
+pygetwindow>=0.0.9
+
+# Secure Mesh Network
+pynacl>=1.5.0
+websockets>=12.0
+fastapi>=0.111.0
+uvicorn>=0.29.0
