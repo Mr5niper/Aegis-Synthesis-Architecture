@@ -5,12 +5,12 @@
 ---
 
 ## 📋 Table of Contents
-1. [System Requirements](#%EF%B8%8F-system-requirements)
+1. [System Requirements](#-system-requirements)
 2. [Installation](#-installation)
-3. [First Run](#first-run)
-4. [Using Aegis](#using-aegis)
-5. [Troubleshooting](#troubleshooting)
-6. [Advanced Features](#advanced-features)
+3. [First Run](#-first-run)
+4. [Using Aegis](#-using-aegis)
+5. [Troubleshooting](#-troubleshooting)
+6. [Advanced Features](#-advanced-features)
 
 ---
 
