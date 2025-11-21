@@ -39,18 +39,30 @@ Consent tokens for collaboration security
 WAL-mode SQLite for data integrity
 Think of it as: Your personal ChatGPT that lives on your computer, remembers what you tell it, can connect your devices securely, and never sends your data anywhere.
 
-## Quick Start
+## **Quick Start**
 
 ```bash
-# 1. Create virtual environment
-make venv
-make install
+# 1. Setup environment
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 
-# 2. Download models (automatic on first run)
-# Edit config.yaml to choose models
+# 2. Create package structure (required for Python imports)
+# Windows:
+foreach ($d in @("src","src\agent","src\core","src\internet","src\learning","src\memory","src\mesh","src\proactive","src\secure","src\services","src\tools","src\ui","src\utils")) { New-Item -ItemType File -Path "$d\__init__.py" -Force | Out-Null }
+# macOS/Linux:
+touch src/{,agent/,core/,internet/,learning/,memory/,mesh/,proactive/,secure/,services/,tools/,ui/,utils/}__init__.py
 
-# 3. Run GUI mode
-make gui
+# 3. Launch Aegis
+python -m src.main_gui
+```
+
+**First run downloads ~2GB model automatically (5-10 min). Browser opens to `http://localhost:7860` when ready.**
+
+**Try:** "Hello" → "What's 23 * 456?" → "Remember my favorite color is blue"
+
+---
+
 
 # 4. (Optional) Run relay server for P2P
 make nexus
