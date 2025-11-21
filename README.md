@@ -47,13 +47,16 @@ python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# 2. Create package structure (required for Python imports)
-# Windows:
-foreach ($d in @("src","src\agent","src\core","src\internet","src\learning","src\memory","src\mesh","src\proactive","src\secure","src\services","src\tools","src\ui","src\utils")) { New-Item -ItemType File -Path "$d\__init__.py" -Force | Out-Null }
-# macOS/Linux:
-touch src/{,agent/,core/,internet/,learning/,memory/,mesh/,proactive/,secure/,services/,tools/,ui/,utils/}__init__.py
+# 1. Clone and setup
+git clone <repository-url>
+cd aegis-synthesis
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# 3. Launch Aegis
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Run Aegis
 python -m src.main_gui
 ```
 
