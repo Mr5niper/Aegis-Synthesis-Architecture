@@ -14,7 +14,7 @@
 
 ---
 
-## 🖥️ System Requirements(#system-requirements)
+## 🖥️ System Requirements
 
 ### Minimum:
 - **OS:** Windows 10/11, macOS 10.15+, or Linux
