@@ -48,7 +48,7 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 # 1. Clone and setup
-git clone <repository-url>
+git clone https://github.com/Mr5niper/Aegis-Synthesis-Architecture/ aegis-synthesis
 cd aegis-synthesis
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
