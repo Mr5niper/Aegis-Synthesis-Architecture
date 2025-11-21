@@ -6,7 +6,7 @@
 
 ## 📋 Table of Contents
 1. [System Requirements](#%EF%B8%8F-system-requirements)
-2. [Installation](#installation)
+2. [Installation](#-installation)
 3. [First Run](#first-run)
 4. [Using Aegis](#using-aegis)
 5. [Troubleshooting](#troubleshooting)
