@@ -66,6 +66,3 @@ python -m src.main_gui
 
 ---
 
-
-# 4. (Optional) Run relay server for P2P
-make nexus
