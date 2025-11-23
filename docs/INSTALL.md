@@ -276,7 +276,7 @@ source venv/bin/activate
 **All Platforms:**
 ```bash
 # Update pip first
-pip install --upgrade pip setuptools wheel
+python -m pip install --upgrade pip setuptools wheel
 
 # Install core dependencies (Python 3.13 compatible versions)
 pip install --no-cache-dir sentence-transformers scipy scikit-learn transformers requests beautifulsoup4 duckduckgo-search pydantic pyyaml gradio pyinstaller pynacl websockets fastapi uvicorn pyperclip
