@@ -1,8 +1,22 @@
-# Core LLM & Embeddings (Python 3.13 compatible versions)
-llama-cpp-python>=0.3.2
+# ===========================================================================
+#  Aegis Synthesis Architecture — Python 3.13 dependencies
+# ---------------------------------------------------------------------------
+#  NOTE: torch and llama-cpp-python are intentionally NOT listed here.
+#  They must be installed from prebuilt CPU wheel indexes to avoid a
+#  from-source compile (which needs MSVC + CMake). BUILD_EXE.bat installs
+#  them first, in this order, before installing this file:
+#
+#    pip install torch --index-url https://download.pytorch.org/whl/cpu
+#    pip install llama-cpp-python --prefer-binary \
+#        --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+#
+#  If you install manually, run those two commands before:
+#    pip install --prefer-binary -r requirements.txt
+# ===========================================================================
+
+# Embeddings / ML (torch is pulled in separately, see note above)
 sentence-transformers>=2.7.0
 numpy>=2.0.0
-torch>=2.3.0
 transformers>=4.45.0
 scikit-learn>=1.5.0
 scipy>=1.11.0
