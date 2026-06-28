@@ -189,7 +189,8 @@ def main():
         return ReActAgent(
             llm_current, tools, mem, kb, graph, cfg.assistant.system_prompt, 
             cfg.assistant.max_reasoning_steps, inbox=inbox,
-            user_profile=user_profile, style_adapter=style_adapter
+            user_profile=user_profile, style_adapter=style_adapter,
+            distill_facts=cfg.assistant.distill_facts
         )
 
     consent_broker = ConsentBroker()

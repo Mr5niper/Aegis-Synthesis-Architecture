@@ -26,22 +26,23 @@ def _extract_first_json(text: str) -> Optional[str]:
     return None
 
 class ReActAgent:
-    def __init__(self, llm: AsyncLocalLLM, tools: AsyncToolRegistry, mem: ConversationMemory, kb: LiteVectorStore, graph: LWWGraph, system_prompt: str, max_steps: int, inbox: MemoryInbox, user_profile: UserProfile, style_adapter: StyleAdapter):
+    def __init__(self, llm: AsyncLocalLLM, tools: AsyncToolRegistry, mem: ConversationMemory, kb: LiteVectorStore, graph: LWWGraph, system_prompt: str, max_steps: int, inbox: MemoryInbox, user_profile: UserProfile, style_adapter: StyleAdapter, distill_facts: bool = True):
         self.llm, self.tools, self.mem, self.kb, self.graph, self.inbox = llm, tools, mem, kb, graph, inbox
         self.system_prompt, self.max_steps = system_prompt, max_steps
         self.profile = user_profile
         self.style_adapter = style_adapter
+        self.distill_facts = distill_facts
 
     async def run(self, session_id: str, user: str, cancel: asyncio.Event) -> AsyncGenerator[str, None]:
         # 1. Update style model based on user input
         self.style_adapter.analyze_message(user)
-        
+
         # 2. Get contextual system prompt parts
         profile_prompt = self.profile.get_system_prompt_addon()
         style_prompt = self.style_adapter.get_adapted_prompt_prefix()
-        
+
         full_system_prompt = f"{self.system_prompt} {profile_prompt} {style_prompt}".strip()
-        
+
         scratch = self.mem.get_recent_context(session_id)
         rag = await asyncio.get_event_loop().run_in_executor(None, self.kb.retrieve_context, user, 3)
         facts = self.graph.facts_for_prompt(8)
@@ -68,7 +69,7 @@ class ReActAgent:
                     full_answer += tok
                     yield tok
                 self.mem.add_message(session_id, user, full_answer, context="\n".join(observations))
-                await self._distill_facts(user, full_answer)
+                await self._maybe_distill_facts(user, full_answer)
                 return
 
             thought = call.rationale or "Planning next step."
@@ -81,7 +82,13 @@ class ReActAgent:
         final_answer_text = await self.llm.generate_async(final_answer_prompt(full_system_prompt, scratch, rag, "\n".join(observations), user), 512, 0.6, 0.9, 40, 1.1)
         yield final_answer_text
         self.mem.add_message(session_id, user, final_answer_text, context="\n".join(observations))
-        await self._distill_facts(user, final_answer_text)
+        await self._maybe_distill_facts(user, final_answer_text)
+
+    async def _maybe_distill_facts(self, user: str, reply: str):
+        # Skipping this saves one full LLM generation per chat turn.
+        if not self.distill_facts:
+            return
+        await self._distill_facts(user, reply)
 
     async def _distill_facts(self, user: str, reply: str):
         prompt = (f"System:\nExtract up to 3 factual triples about the user from the exchange if present. Output strict JSON array of {{src,rel,dst,confidence}}. Use 'User' as src for user facts; only include confidence >= 0.8.\n\nUser: {user}\nAssistant: {reply}\n\nJSON:")
