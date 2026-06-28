@@ -1,8 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_submodules
+
 block_cipher = None
 
+# Bundle every module under the `src` package. This guarantees lazily- or
+# dynamically-imported submodules (e.g. tools loaded by name) are included.
+src_submodules = collect_submodules('src')
+
 a = Analysis(
-    ['src/main_gui.py'],
+    ['aegis_launcher.py'],
     pathex=['.'],
     binaries=[],
     datas=[('models','models'),('data','data'),('config.yaml','.')],
@@ -13,7 +19,7 @@ a = Analysis(
         'pyperclip','pygetwindow','pyrect',
         'anyio', 'starlette', 'nacl.utils',
         'sniffio',
-    ],
+    ] + src_submodules,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
