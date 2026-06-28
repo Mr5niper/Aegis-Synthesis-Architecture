@@ -21,5 +21,8 @@ a = Analysis(
     noarchive=False
 )
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-exe = EXE(pyz, a.scripts, a.binaries, a.zipfiles, a.datas, [], name='Aegis', console=True, upx=True)
-coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, strip=False, upx=True, name='Aegis')
+# UPX disabled: it frequently corrupts large native DLLs (torch, llama_cpp,
+# CUDA) and produces executables that crash on launch. Matches the --noupx
+# choice used in the WindowsAudioControl build.
+exe = EXE(pyz, a.scripts, a.binaries, a.zipfiles, a.datas, [], name='Aegis', console=True, upx=False)
+coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, strip=False, upx=False, name='Aegis')

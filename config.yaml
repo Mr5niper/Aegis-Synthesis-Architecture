@@ -18,10 +18,16 @@ assistant:
   max_reasoning_steps: 5
   allow_web_search: true
   tool_timeout_sec: 20
-  proactive_enabled: true
+  # Disabled by default: the background agents (Sentinel/Curator) share the single
+  # CPU model instance with chat and are the main cause of lag in single-user mode.
+  # Re-enable by setting this true AND leaving env AEGIS_PROACTIVE unset/!=0.
+  proactive_enabled: false
   quiet_hours: [23, 7] # 11 PM to 7 AM
   suggestions_per_min: 5
   allow_domains: ["wikipedia.org", "pypi.org", "python.org", "arxiv.org", "numpy.org", "pytorch.org"]
+  # Distill user facts after each turn. Costs one extra LLM generation per message.
+  # Turn off if you want maximum chat responsiveness.
+  distill_facts: true
   allow_code_exec: false
 
 user_profile:

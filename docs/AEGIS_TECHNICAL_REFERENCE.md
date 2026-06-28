@@ -1,7 +1,7 @@
 # Aegis Synthesis Architecture — Technical Reference Manual
 
-**Version:** 1.0  
-**Date:** November 2025  
+**Version:** 1.1  
+**Date:** June 2026  
 **Status:** Alpha (Testing and Updates are welcome)
 
 ---
@@ -556,8 +556,8 @@ This document should be sufficient to build, operate, extend, and reason about t
 **Document Information:**
 
 **Title:** Aegis Synthesis Architecture — Technical Reference Manual  
-**Version:** 1.0  
-**Date:** November 2025  
+**Version:** 1.1  
+**Date:** June 2026  
 **Status:** Alpha (Testing and Updates are welcome)
 
 ---
