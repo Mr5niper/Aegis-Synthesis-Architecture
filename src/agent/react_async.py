@@ -55,7 +55,13 @@ class ReActAgent:
                 yield "\n[Stopped by user]\n"; return
 
             step_prompt = react_step_prompt(full_system_prompt, self.tools.list_tools(), scratch, user)
-            route_text = await self.llm.generate_async(step_prompt, 220, 0.1, 0.9, 40, 1.1)
+            # Hard stop sequences for the router: the model must emit ONE JSON
+            # object and stop. Small models otherwise keep going and hallucinate
+            # a whole fake transcript (Observation:/Assistant:/User: lines, made-
+            # up tool calls and URLs). Stopping on a blank line or any of those
+            # role markers ends generation right after the JSON object.
+            route_stop = ["\n\n", "\nObservation:", "\nAssistant:", "\nUser:", "\nSystem:"]
+            route_text = await self.llm.generate_async(step_prompt, 220, 0.1, 0.9, 40, 1.1, stop=route_stop)
 
             js = _extract_first_json(route_text.strip())
             call = None

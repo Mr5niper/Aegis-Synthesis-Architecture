@@ -12,10 +12,14 @@ TOOL_DESCRIPTIONS = {
     "none": "Use this when you already know the answer and no tool is needed.",
 }
 
-TOOLS_SCHEMA = """To use a tool, output ONLY a single JSON object on its own, with this exact schema and nothing else:
+TOOLS_SCHEMA = """To use a tool, output ONLY a single JSON object on one line, with this exact schema and NOTHING else:
 { "tool": "<tool_name>", "args": { ... }, "rationale": "<one short sentence>" }
 If no tool is needed because you can answer directly, output exactly:
-{ "tool": "none", "args": {}, "rationale": "I can answer directly." }"""
+{ "tool": "none", "args": {}, "rationale": "I can answer directly." }
+
+Output the single JSON object and then STOP. Do not write an Observation,
+do not write the answer, do not continue the conversation, do not invent
+further turns. Exactly one JSON object, nothing before or after it."""
 
 # Few-shot examples steer small models hard. The web-search examples are the
 # ones that were previously missing, which is why the model rarely searched.
@@ -36,7 +40,13 @@ User: What time is it?
 { "tool": "now", "args": {}, "rationale": "Needs the current clock." }
 
 User: Write me a haiku about the sea.
-{ "tool": "none", "args": {}, "rationale": "Creative task, no tool needed." }"""
+{ "tool": "none", "args": {}, "rationale": "Creative task, no tool needed." }
+
+User: Hello, what is your name?
+{ "tool": "none", "args": {}, "rationale": "I can answer about myself directly." }
+
+User: What can you do?
+{ "tool": "none", "args": {}, "rationale": "Question about myself, answer directly." }"""
 
 
 def _tool_menu(tools_list: list[str]) -> str:
@@ -55,7 +65,12 @@ def react_step_prompt(system: str, tools_list: list[str], scratchpad: str, user:
         f"{TOOLS_SCHEMA}\n\n"
         f"Guidance: If the question is about current events, recent facts, prices, "
         f"versions, people, or anything you are not certain is still accurate, you MUST "
-        f"use search_web rather than guessing.\n\n"
+        f"use search_web rather than guessing.\n"
+        f"For greetings, small talk, questions about yourself (your name, your "
+        f"purpose, what you can do), opinions, or anything you can answer from what "
+        f"you already know, choose \"none\" and answer directly. Do NOT use kb_add or "
+        f"kb_query for simple conversational questions; the knowledge base is for "
+        f"information the user explicitly asked you to store or look up.\n\n"
         f"{ROUTER_EXAMPLES}\n\n"
         f"Conversation and observations so far:\n{scratchpad}\n\n"
         f"User: {user}\n"
