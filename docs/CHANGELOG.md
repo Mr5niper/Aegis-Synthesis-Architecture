@@ -1,5 +1,17 @@
 # AEGIS SYNTHESIS ARCHITECTURE CHANGELOG
 
+## vx.x.x.x - [next]
+
+### Stability
+- **Dropped connection no longer freezes the UI (`src/core/llm_async.py`):** When a chat connection was torn down mid-generation (for example toggling the theme, or closing and reopening the browser tab), the streaming producer kept running `llama.cpp` to its full token limit while holding the per-model semaphore. On a CPU model that blocked every other model operation for up to a couple of minutes until the abandoned generation finished on its own.
+  - The streaming generator now signals an internal stop when the consumer is torn down (`GeneratorExit`) or the Stop button is pressed, so the producer halts at its next token instead of generating all of them while holding the lock.
+  - Token enqueue is non-blocking with a bounded wait, so a gone consumer can never wedge the producer thread on a full queue. The model lock is released in roughly one token's time on disconnect rather than after the whole generation.
+
+### Agent
+- **Reasoning loop guard (`src/agent/react_async.py`):** The ReAct agent could get stuck repeating the same tool call (for example calling `calc` with `340 * 1` over and over) until it exhausted `max_reasoning_steps`, showing a wall of repeated Thinking/Action blocks before finally answering.
+  - The agent now records each executed `(tool, args)` signature. If the model selects a call it has already run, the agent stops iterating and composes the final answer from the observations gathered so far instead of burning more steps.
+  - The fallback final answer (reached by the loop guard or by exhausting `max_reasoning_steps`) is now streamed token-by-token like the normal path, rather than returned as one blocking generation.
+
 ## v1.1.0.0 - [current]
 
 ### Performance
