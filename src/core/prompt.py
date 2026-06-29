@@ -12,10 +12,14 @@ TOOL_DESCRIPTIONS = {
     "none": "Use this when you already know the answer and no tool is needed.",
 }
 
-TOOLS_SCHEMA = """To use a tool, output ONLY a single JSON object on its own, with this exact schema and nothing else:
+TOOLS_SCHEMA = """To use a tool, output ONLY a single JSON object on one line, with this exact schema and NOTHING else:
 { "tool": "<tool_name>", "args": { ... }, "rationale": "<one short sentence>" }
 If no tool is needed because you can answer directly, output exactly:
-{ "tool": "none", "args": {}, "rationale": "I can answer directly." }"""
+{ "tool": "none", "args": {}, "rationale": "I can answer directly." }
+
+Output the single JSON object and then STOP. Do not write an Observation,
+do not write the answer, do not continue the conversation, do not invent
+further turns. Exactly one JSON object, nothing before or after it."""
 
 # Few-shot examples steer small models hard. The web-search examples are the
 # ones that were previously missing, which is why the model rarely searched.
@@ -36,7 +40,13 @@ User: What time is it?
 { "tool": "now", "args": {}, "rationale": "Needs the current clock." }
 
 User: Write me a haiku about the sea.
-{ "tool": "none", "args": {}, "rationale": "Creative task, no tool needed." }"""
+{ "tool": "none", "args": {}, "rationale": "Creative task, no tool needed." }
+
+User: Hello, what is your name?
+{ "tool": "none", "args": {}, "rationale": "I can answer about myself directly." }
+
+User: What can you do?
+{ "tool": "none", "args": {}, "rationale": "Question about myself, answer directly." }"""
 
 
 def _tool_menu(tools_list: list[str]) -> str:
@@ -53,9 +63,17 @@ def react_step_prompt(system: str, tools_list: list[str], scratchpad: str, user:
         f"You can call ONE tool to help answer the user. Available tools:\n"
         f"{_tool_menu(tools_list)}\n\n"
         f"{TOOLS_SCHEMA}\n\n"
-        f"Guidance: If the question is about current events, recent facts, prices, "
-        f"versions, people, or anything you are not certain is still accurate, you MUST "
-        f"use search_web rather than guessing.\n\n"
+        f"Guidance: Most messages need NO tool. For greetings, small talk, "
+        f"questions about yourself (your name, your purpose, what you can do), "
+        f"opinions, explanations, writing, or anything you can answer from what you "
+        f"already know, you MUST choose \"none\" and answer directly. Never use "
+        f"kb_add or kb_query for simple conversational questions; the knowledge base "
+        f"is only for information the user explicitly asked you to store or look up.\n"
+        f"Only use a tool when the question genuinely requires one: search_web for "
+        f"current events, recent facts, prices, versions, or people you are not "
+        f"certain about; calc for arithmetic; now for the current time; fetch_url "
+        f"for a specific page. If in doubt for a conversational message, choose "
+        f"\"none\".\n\n"
         f"{ROUTER_EXAMPLES}\n\n"
         f"Conversation and observations so far:\n{scratchpad}\n\n"
         f"User: {user}\n"
@@ -71,5 +89,13 @@ def final_answer_prompt(system: str, chat: str, rag: str, observations: str, use
         parts.append("Knowledge context:\n" + rag)
     if observations:
         parts.append("Tool observations (use these for your answer; cite URLs when present):\n" + observations)
+    # Small models, primed by the JSON of the routing step, tend to answer in
+    # JSON or key/value form. Explicitly require a natural-language reply so the
+    # user sees a sentence, not a {"name": ...} object.
+    parts.append(
+        "Answer the user directly in plain, natural English prose, as a friendly "
+        "assistant speaking to a person. Do NOT output JSON, key/value pairs, code "
+        "blocks, curly braces, or field names. Write normal sentences."
+    )
     parts.append("User:\n" + user + "\nAssistant:")
     return "\n\n".join(parts)

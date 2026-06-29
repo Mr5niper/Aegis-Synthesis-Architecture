@@ -129,9 +129,25 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 # accompanying dist/Aegis/ folder. (Previously a COLLECT step also produced a
 # one-folder build; that has been removed.)
 #
+# Pick the right icon for the build platform. Windows uses aegis.ico, macOS
+# uses aegis.icns; Linux ignores the icon entirely. If the expected icon file
+# is not present we pass icon=None so the build still succeeds (the executable
+# just gets a default icon). This keeps one spec working on all three OSes.
+import sys as _sys, os as _os
+if _sys.platform.startswith('win'):
+    _icon = 'aegis.ico'
+elif _sys.platform == 'darwin':
+    _icon = 'aegis.icns'
+else:
+    _icon = None  # Linux: PyInstaller does not embed an icon in the ELF
+if _icon and not _os.path.exists(_icon):
+    print('WARNING: icon file %r not found; building without a custom icon.' % _icon)
+    _icon = None
+
 # version=  embeds the Windows version resource built above from
 #           src/__version__.py, so right-click Properties -> Details shows it.
-# icon=     sets the executable's icon. Provide aegis.ico in the repo root.
+#           version_resource is None on non-Windows, which EXE() accepts.
+# icon=     platform-selected above (aegis.ico on Windows, aegis.icns on macOS).
 # UPX disabled: it can corrupt large native DLLs (torch, llama_cpp) -> launch crash.
 exe = EXE(
     pyz,
@@ -144,5 +160,5 @@ exe = EXE(
     console=True,
     upx=False,
     version=version_resource,
-    icon='aegis.ico',
+    icon=_icon,
 )
