@@ -208,42 +208,46 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
             filepath.write_text(md, encoding='utf-8')
             
             return f"✅ Exported to: {filename}"
-        # FIX #2 HANDLER: Updated Rating Handler
+        # Rating handler. Returns exactly two outputs: the feedback-status text
+        # and the correction box visibility. It does NOT write back to rating_btn
+        # (doing so retriggers .change with rating=None, which blanked the status
+        # message and made it look like nothing happened).
         def handle_rating(rating, history, correction_text):
-            if not history or not trainer:
-                return "⚠️ No conversation history available.", gr.update(visible=False), gr.update(value=None)
-            
-            if not rating:  # No rating selected
-                return "", gr.update(visible=False), gr.update(value=None)
-            
+            if not rating:  # nothing selected (e.g. radio was cleared)
+                return "", gr.update(visible=False)
+
+            if not history:
+                return "⚠️ No conversation yet to rate.", gr.update(visible=False)
+
             last_user = next(
                 (m.get("content", "") for m in reversed(history) if m.get("role") == "user"), ""
             )
             last_assistant = next(
                 (m.get("content", "") for m in reversed(history) if m.get("role") == "assistant"), ""
             )
-            
+
             if rating == "✏️ Needs Correction":
                 if correction_text and correction_text.strip():
-                    trainer.log_correction(
-                        last_user,
-                        last_assistant,
-                        correction_text.strip(),
-                        "user_correction"
-                    )
-                    return "✅ Correction logged! I'll learn from this.", gr.update(visible=False), gr.update(value=None)
+                    if trainer:
+                        trainer.log_correction(
+                            last_user,
+                            last_assistant,
+                            correction_text.strip(),
+                            "user_correction",
+                        )
+                        return "✅ Correction logged! I'll learn from this.", gr.update(visible=False)
+                    return "⚠️ Correction training is not enabled.", gr.update(visible=False)
                 else:
-                    return "⚠️ Please enter your correction above.", gr.update(visible=True), gr.update(value=rating)
-            
+                    # Reveal the correction box and wait for the user to type + submit.
+                    return "✏️ Enter your correction below, then press Enter.", gr.update(visible=True)
+
             elif rating == "👍 Good":
-                # Could log positive feedback here
-                return "✅ Thanks! Glad I could help.", gr.update(visible=False), gr.update(value=None)
-            
+                return "✅ Thanks! Glad I could help.", gr.update(visible=False)
+
             elif rating == "👎 Bad":
-                # Could log negative feedback here
-                return "📝 Noted. I'll try to improve!", gr.update(visible=False), gr.update(value=None)
-            
-            return "", gr.update(visible=False), gr.update(value=None)
+                return "📝 Noted. I'll try to improve!", gr.update(visible=False)
+
+            return "", gr.update(visible=False)
             
         # FIX #2: Updated Chat Flow to handle message disappearance
         async def user_turn(message, history, s, c):
@@ -320,23 +324,19 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
             outputs=[rating_output],
             queue=False
         )
-        # Wire up Rating flow 
-        rating_btn.change(
-            lambda r: gr.update(visible=(r == "✏️ Needs Correction")),
-            inputs=[rating_btn],
-            outputs=[correction_box],
-            queue=False
-        )
+        # Wire up Rating flow. A single change-handler writes the feedback status
+        # and toggles the correction box. It deliberately does NOT output back to
+        # rating_btn (that retriggered change and wiped the status message).
         rating_btn.change(
             handle_rating,
             inputs=[rating_btn, chatbot, correction_box],
-            outputs=[rating_output, correction_box, rating_btn],
+            outputs=[rating_output, correction_box],
             queue=False
         )
         correction_box.submit(
             handle_rating,
             inputs=[rating_btn, chatbot, correction_box],
-            outputs=[rating_output, correction_box, rating_btn],
+            outputs=[rating_output, correction_box],
             queue=False
         )
         async def suggestions_stream():
