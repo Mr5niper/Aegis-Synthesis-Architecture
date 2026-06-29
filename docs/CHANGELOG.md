@@ -1,24 +1,5 @@
 # AEGIS SYNTHESIS ARCHITECTURE CHANGELOG
 
-## vx.x.x.x - [next]
-
-### Stability
-- **Dropped connection no longer freezes the UI (`src/core/llm_async.py`):** When a chat connection was torn down mid-generation (for example toggling the theme, or closing and reopening the browser tab), the streaming producer kept running `llama.cpp` to its full token limit while holding the per-model semaphore. On a CPU model that blocked every other model operation for up to a couple of minutes until the abandoned generation finished on its own.
-  - The streaming generator now signals an internal stop when the consumer is torn down (`GeneratorExit`) or the Stop button is pressed, so the producer halts at its next token instead of generating all of them while holding the lock.
-  - Token enqueue is non-blocking with a bounded wait, so a gone consumer can never wedge the producer thread on a full queue. The model lock is released in roughly one token's time on disconnect rather than after the whole generation.
-
-### Agent
-- **Reasoning loop guard (`src/agent/react_async.py`):** The ReAct agent could get stuck repeating the same tool call (for example calling `calc` with `340 * 1` over and over) until it exhausted `max_reasoning_steps`, showing a wall of repeated Thinking/Action blocks before finally answering.
-  - The agent now records each executed `(tool, args)` signature. If the model selects a call it has already run, the agent stops iterating and composes the final answer from the observations gathered so far instead of burning more steps.
-  - The fallback final answer (reached by the loop guard or by exhausting `max_reasoning_steps`) is now streamed token-by-token like the normal path, rather than returned as one blocking generation.
-- **Router no longer hallucinates a fake transcript (`src/agent/react_async.py`):** The tool-routing generation produced up to 220 tokens with only generic stop sequences, so the small model would emit its one JSON tool call and then keep going, inventing `Observation:`, `Assistant:`, and `User:` lines, fake follow-up questions, made-up tool calls, and fabricated URLs.
-  - The routing call now passes tight stop sequences (a blank line and the `Observation:`/`Assistant:`/`User:`/`System:` role markers), so generation ends immediately after the single JSON object.
-- **Simple questions answered directly instead of misusing tools (`src/core/prompt.py`):** For conversational questions such as "what is your name" the model reached for `kb_add`/`kb_query` against an empty knowledge base and took an unnecessary tool step before answering.
-  - The routing guidance now leads with the rule that most messages need no tool: greetings, small talk, questions about the assistant itself, opinions, explanations, and anything answerable from existing knowledge must use `none` and answer directly, and must never use `kb_add`/`kb_query` for simple conversational questions. Added `none` few-shot examples for an identity question and a capabilities question.
-  - The tool-call schema instruction was tightened to emit exactly one JSON object and then stop, with no observation, answer, or further turns.
-- **Final answers are now plain prose, not JSON (`src/core/prompt.py`):** Primed by the JSON of the routing step, the small model sometimes returned the answer as a JSON object (for example `{"name": "Aegis", "type": "AI Assistant"}`) instead of a sentence.
-  - `final_answer_prompt` now explicitly instructs the model to answer in plain, natural English and to not output JSON, key/value pairs, code blocks, curly braces, or field names.
-
 ## v1.1.0.0 - [current]
 
 ### Performance
@@ -33,11 +14,26 @@
 - **Streaming inference race / crash fix (`core/llm_async.py`):** `stream_async` released the model semaphore as soon as the consumer loop ended, while its producer ran on a daemon thread that could still be executing inside `llama.cpp`. A second call could then acquire the semaphore and re-enter the non-reentrant library concurrently, corrupting state and crashing the process.
   - The producer is now a non-daemon thread that is explicitly `join()`-ed (off the event loop) inside the `async with self._sem` block, so the lock is never released until the worker has fully exited `llama.cpp`.
   - Cancellation now drains the queue until the producer emits its end sentinel, guaranteeing the worker is never left running after a stop.
+- **Dropped connection no longer freezes the UI (`src/core/llm_async.py`):** When a chat connection was torn down mid-generation (for example toggling the theme, or closing and reopening the browser tab), the streaming producer kept running `llama.cpp` to its full token limit while holding the per-model semaphore. On a CPU model that blocked every other model operation for up to a couple of minutes until the abandoned generation finished on its own.
+  - The streaming generator now signals an internal stop when the consumer is torn down (`GeneratorExit`) or the Stop button is pressed, so the producer halts at its next token instead of generating all of them while holding the lock.
+  - Token enqueue is non-blocking with a bounded wait, so a gone consumer can never wedge the producer thread on a full queue. The model lock is released in roughly one token's time on disconnect rather than after the whole generation.
 
 ### Web Search
 - **Reliable tool routing (`core/prompt.py`):** Web search was enabled in config and registered as a tool, but the router prompt only listed bare tool names with no descriptions or examples. The 3B model rarely emitted the tool-call JSON, so it answered current-info questions from stale memory instead of searching.
   - Rewrote the ReAct routing prompt to include a per-tool description menu, an explicit instruction to use `search_web` for any current/uncertain information, and few-shot examples (including web-search and `fetch_url` cases).
   - Clarified the final-answer prompt to instruct the model to use tool observations and cite URLs when present.
+
+### Agent
+- **Reasoning loop guard (`src/agent/react_async.py`):** The ReAct agent could get stuck repeating the same tool call (for example calling `calc` with `340 * 1` over and over) until it exhausted `max_reasoning_steps`, showing a wall of repeated Thinking/Action blocks before finally answering.
+  - The agent now records each executed `(tool, args)` signature. If the model selects a call it has already run, the agent stops iterating and composes the final answer from the observations gathered so far instead of burning more steps.
+  - The fallback final answer (reached by the loop guard or by exhausting `max_reasoning_steps`) is now streamed token-by-token like the normal path, rather than returned as one blocking generation.
+- **Router no longer hallucinates a fake transcript (`src/agent/react_async.py`):** The tool-routing generation produced up to 220 tokens with only generic stop sequences, so the small model would emit its one JSON tool call and then keep going, inventing `Observation:`, `Assistant:`, and `User:` lines, fake follow-up questions, made-up tool calls, and fabricated URLs.
+  - The routing call now passes tight stop sequences (a blank line and the `Observation:`/`Assistant:`/`User:`/`System:` role markers), so generation ends immediately after the single JSON object.
+- **Simple questions answered directly instead of misusing tools (`src/core/prompt.py`):** For conversational questions such as "what is your name" the model reached for `kb_add`/`kb_query` against an empty knowledge base and took an unnecessary tool step before answering.
+  - The routing guidance now leads with the rule that most messages need no tool: greetings, small talk, questions about the assistant itself, opinions, explanations, and anything answerable from existing knowledge must use `none` and answer directly, and must never use `kb_add`/`kb_query` for simple conversational questions. Added `none` few-shot examples for an identity question and a capabilities question.
+  - The tool-call schema instruction was tightened to emit exactly one JSON object and then stop, with no observation, answer, or further turns.
+- **Final answers are now plain prose, not JSON (`src/core/prompt.py`):** Primed by the JSON of the routing step, the small model sometimes returned the answer as a JSON object (for example `{"name": "Aegis", "type": "AI Assistant"}`) instead of a sentence.
+  - `final_answer_prompt` now explicitly instructs the model to answer in plain, natural English and to not output JSON, key/value pairs, code blocks, curly braces, or field names.
 
 ### User Interface
 - **Migrated the GUI from Gradio 4 to Gradio 5.50.0 (`src/ui/gui.py`, `requirements.txt`):** Gradio 4.44.1 bundled a `gradio_client` whose API-schema generator crashed at request time with `TypeError: argument of type 'bool' is not iterable` when running against pydantic 2.11+, which the resolver pulled in. The schema generator expected a dict where pydantic 2.11 now emits a bare boolean (gradio issues #10662 and #11084). Moving to Gradio 5.50.0 takes the upstream fix instead of pinning pydantic backward.
