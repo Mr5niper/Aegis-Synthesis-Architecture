@@ -63,14 +63,17 @@ def react_step_prompt(system: str, tools_list: list[str], scratchpad: str, user:
         f"You can call ONE tool to help answer the user. Available tools:\n"
         f"{_tool_menu(tools_list)}\n\n"
         f"{TOOLS_SCHEMA}\n\n"
-        f"Guidance: If the question is about current events, recent facts, prices, "
-        f"versions, people, or anything you are not certain is still accurate, you MUST "
-        f"use search_web rather than guessing.\n"
-        f"For greetings, small talk, questions about yourself (your name, your "
-        f"purpose, what you can do), opinions, or anything you can answer from what "
-        f"you already know, choose \"none\" and answer directly. Do NOT use kb_add or "
-        f"kb_query for simple conversational questions; the knowledge base is for "
-        f"information the user explicitly asked you to store or look up.\n\n"
+        f"Guidance: Most messages need NO tool. For greetings, small talk, "
+        f"questions about yourself (your name, your purpose, what you can do), "
+        f"opinions, explanations, writing, or anything you can answer from what you "
+        f"already know, you MUST choose \"none\" and answer directly. Never use "
+        f"kb_add or kb_query for simple conversational questions; the knowledge base "
+        f"is only for information the user explicitly asked you to store or look up.\n"
+        f"Only use a tool when the question genuinely requires one: search_web for "
+        f"current events, recent facts, prices, versions, or people you are not "
+        f"certain about; calc for arithmetic; now for the current time; fetch_url "
+        f"for a specific page. If in doubt for a conversational message, choose "
+        f"\"none\".\n\n"
         f"{ROUTER_EXAMPLES}\n\n"
         f"Conversation and observations so far:\n{scratchpad}\n\n"
         f"User: {user}\n"
@@ -86,5 +89,13 @@ def final_answer_prompt(system: str, chat: str, rag: str, observations: str, use
         parts.append("Knowledge context:\n" + rag)
     if observations:
         parts.append("Tool observations (use these for your answer; cite URLs when present):\n" + observations)
+    # Small models, primed by the JSON of the routing step, tend to answer in
+    # JSON or key/value form. Explicitly require a natural-language reply so the
+    # user sees a sentence, not a {"name": ...} object.
+    parts.append(
+        "Answer the user directly in plain, natural English prose, as a friendly "
+        "assistant speaking to a person. Do NOT output JSON, key/value pairs, code "
+        "blocks, curly braces, or field names. Write normal sentences."
+    )
     parts.append("User:\n" + user + "\nAssistant:")
     return "\n\n".join(parts)
