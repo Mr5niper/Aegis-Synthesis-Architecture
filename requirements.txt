@@ -1,33 +1,70 @@
-# Core LLM & Embeddings (Python 3.13 compatible versions)
-llama-cpp-python>=0.3.2
-sentence-transformers>=2.7.0
-numpy>=2.0.0
-torch>=2.3.0
-transformers>=4.45.0
-scikit-learn>=1.5.0
-scipy>=1.11.0
+# ===========================================================================
+#  Aegis Synthesis Architecture — Python 3.13 dependencies (PINNED)
+# ---------------------------------------------------------------------------
+#  All versions PINNED with == for deterministic builds. Do NOT loosen to >=.
+#
+#  Gradio is on 5.x. src/ui/gui.py uses the modern Gradio 5 "messages" Chatbot
+#  format ({"role","content"} dicts). Gradio 5 fixes the gradio_client API-schema
+#  crash ("TypeError: argument of type 'bool' is not iterable") that affected
+#  4.44.1 under pydantic 2.11+, so pydantic no longer needs to be pinned down.
+#
+#  Every version below is one that publishes a Python 3.13 (cp313) Windows
+#  wheel on PyPI, so pip installs a prebuilt binary and never compiles from
+#  source. Older pins (e.g. scikit-learn 1.5.0, scipy 1.11.0) had no cp313
+#  wheel and forced a source build that fails with: fatal error C1083:
+#  'stdalign.h'. BUILD_EXE.bat installs this file with --only-binary :all:
+#  so a wheel-less pin fails fast instead of invoking the C compiler.
+#
+#  NOTE: torch and llama-cpp-python are intentionally NOT listed here.
+#  They are installed from prebuilt CPU wheel indexes by BUILD_EXE.bat,
+#  in this order, before this file:
+#
+#    pip install torch --index-url https://download.pytorch.org/whl/cpu
+#    pip install "llama-cpp-python==0.3.2" --only-binary :all: \
+#        --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+#
+#  (0.3.2 is the only version the abetlen CPU index publishes a Windows cp313
+#   wheel for; newer versions crash at model load with Windows Error
+#   0xC000001D.)
+#
+#  numpy is NOT pinned here: torch pulls in numpy 2.5.0 (a cp313 wheel) as a
+#  dependency. Pinning an older numpy forced a source build and the stdalign.h
+#  failure above, so it is intentionally left to torch.
+#
+#  pydantic, gradio-client, websockets, and audioop-lts are NOT pinned here:
+#  gradio 5.50.0 constrains all of them itself (pydantic<=2.12.3, gradio-client
+#  ==1.14.0, websockets>=13,<16, and audioop-lts for Python 3.13). Pinning them
+#  separately would only risk conflicting with gradio's own requirements.
+#
+#  If installing manually, run those two commands first, then:
+#    pip install -r requirements.txt
+# ===========================================================================
+
+# Embeddings / ML (torch is pulled in separately, see note above)
+sentence-transformers==5.6.0
+transformers==4.57.6
+scikit-learn==1.9.0
+scipy==1.18.0
 
 # Web & Tools
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-duckduckgo-search>=6.2.0
+requests==2.34.2
+beautifulsoup4==4.15.0
+duckduckgo-search==6.4.2
 
 # Config & Schemas
-pydantic>=2.7.0
-pyyaml>=6.0.0
+pyyaml==6.0.3
 
-# UI
-gradio>=4.29.0
+# UI  (Gradio 5 — gui.py uses the messages Chatbot format)
+gradio==5.50.0
 
 # Build
-PyInstaller>=6.7.0
+PyInstaller==6.21.0
 
 # Proactive Agents
-pyperclip>=1.8.0
-pygetwindow>=0.0.9
+pyperclip==1.11.0
+pygetwindow==0.0.9
 
 # Secure Mesh Network
-pynacl>=1.5.0
-websockets>=12.0
-fastapi>=0.111.0
-uvicorn>=0.29.0
+pynacl==1.6.2
+fastapi==0.138.1
+uvicorn==0.49.0

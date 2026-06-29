@@ -12,7 +12,8 @@ class AssistantConfig(BaseModel):
     tool_timeout_sec: int = 20; proactive_enabled: bool = True
     quiet_hours: Tuple[int, int] = (23, 7); suggestions_per_min: int = 5
     allow_domains: List[str] = Field(default_factory=list)
-    allow_code_exec: bool = False  # NEW
+    distill_facts: bool = True  # NEW: run fact-extraction generation after each turn
+    allow_code_exec: bool = False
 
 class UserProfileConfig(BaseModel):
     enabled: bool = True
@@ -39,13 +40,23 @@ class AppConfig(BaseModel):
     paths: PathsConfig
 
 def load_config(path: str = "config.yaml") -> AppConfig:
-    with open(path, "r") as f: data = yaml.safe_load(f)
+    import sys
+    # When running as a PyInstaller-built exe, the working directory is wherever
+    # the user launched from, not where the exe lives. Look for config.yaml next
+    # to the executable (e.g. dist\config.yaml beside dist\Aegis.exe), NOT inside
+    # the temporary _MEIPASS extraction dir, so the user can edit it.
+    if getattr(sys, "frozen", False):
+        exe_dir_cfg = Path(sys.executable).parent / "config.yaml"
+        if exe_dir_cfg.is_file():
+            path = str(exe_dir_cfg)
+    with open(path, "r") as f:
+        data = yaml.safe_load(f)
     return AppConfig(**data)
 
 def ensure_dirs(cfg: AppConfig):
     for path_str in cfg.paths.model_dump().values():
         Path(path_str).parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Ensure model directories exist
     for model_data in cfg.models:
         Path(model_data['path']).parent.mkdir(parents=True, exist_ok=True)

@@ -17,11 +17,12 @@ class AsyncLocalLLM:
             use_mmap=True,
             verbose=verbose,
         )
-        # Serialize access across all calls to this instance
+        # Serialize access across all calls to this instance.
+        # llama.cpp is NOT reentrant: only one inference may touch self._llm at a time.
         self._sem = asyncio.Semaphore(1)
-        self.n_ctx = n_ctx # Expose context window size
+        self.n_ctx = n_ctx  # Expose context window size
 
-    def _generate_blocking(self, prompt: str, max_tokens: int, temperature: float=0.6, top_p: float=0.9, top_k: int=40, repeat_penalty: float=1.1, stop: Optional[List[str]] = None) -> str:
+    def _generate_blocking(self, prompt: str, max_tokens: int, temperature: float = 0.6, top_p: float = 0.9, top_k: int = 40, repeat_penalty: float = 1.1, stop: Optional[List[str]] = None) -> str:
         stop = stop or ["\nUser:", "\nSystem:"]
         out = self._llm(
             prompt=prompt,
@@ -71,10 +72,27 @@ class AsyncLocalLLM:
                 finally:
                     asyncio.run_coroutine_threadsafe(q.put(end_sentinel), loop)
 
-            threading.Thread(target=producer, daemon=True).start()
+            # NOT a daemon thread. We MUST join it before releasing the semaphore,
+            # otherwise a second caller could grab the semaphore and re-enter
+            # llama.cpp while this thread is still mid-inference -> corruption/crash.
+            producer_thread = threading.Thread(target=producer)
+            producer_thread.start()
 
-            while True:
-                item = await q.get()
-                if item is end_sentinel or (cancel_event and cancel_event.is_set()):
-                    break
-                yield item
+            try:
+                while True:
+                    item = await q.get()
+                    if item is end_sentinel:
+                        break
+                    if cancel_event and cancel_event.is_set():
+                        # Drain until the producer reaches its own cancel check and
+                        # emits the sentinel, so we never leave it running.
+                        while True:
+                            tail = await q.get()
+                            if tail is end_sentinel:
+                                break
+                        break
+                    yield item
+            finally:
+                # Wait for the worker to fully exit llama.cpp before the
+                # `async with self._sem` block releases the lock.
+                await loop.run_in_executor(None, producer_thread.join)

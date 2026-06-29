@@ -1,7 +1,7 @@
-# Aegis Synthesis Architecture — Technical Reference Manual
+# Aegis Synthesis Architecture - Technical Reference Manual
 
-**Version:** 1.0  
-**Date:** November 2025  
+**Version:** 1.1  
+**Date:** June 2026  
 **Status:** Alpha (Testing and Updates are welcome)
 
 ---
@@ -125,7 +125,7 @@ ASA is designed for privacy, reliability, and extensibility. It treats a single 
 - `curator.py`: Background suggestions over knowledge graph; also supports dynamic LLM update
 
 #### Secure (`src/secure`)
-- `crypto.py`: Key generation, ed25519↔curve25519 conversion, basic b64 helpers, fingerprints
+- `crypto.py`: Key generation, ed25519curve25519 conversion, basic b64 helpers, fingerprints
 - `consent.py`: Consent token (versioned, signed, scope, exp) with verify/allows functions
 - `contacts.py`: SQLite contact storage with status and verify key
 
@@ -252,7 +252,7 @@ ASA is designed for privacy, reliability, and extensibility. It treats a single 
   - `knowledge_base_db`: vector store (docs table with text and float32 embedding blobs)
   - `memory_graph_db`: relations table with key (src|rel|dst), ts
   - `inbox_db`: pending facts for approval
-  - `web_cache_db`: url → text with TTL
+  - `web_cache_db`: url -> text with TTL
   - `contacts_db`: verify keys and trust status
 
 ### 7.2 Vector Store
@@ -321,7 +321,7 @@ python -m src.main_headless
 python build_executable.py
 ```
 - `dist/Aegis/` contains the binary and bundled assets
-- `assistant_gui.spec` includes hiddenimports for gradio/fastapi/uvicorn/nacl, and data directories
+- `assistant_gui.spec` includes hiddenimports for gradio/fastapi/uvicorn/nacl and collects the llama_cpp native libraries; the models and data folders are NOT bundled (they are created next to the executable at runtime)
 
 ### 9.4 Configuration
 
@@ -508,8 +508,8 @@ python build_executable.py
 
 ### 18.3 Configuration Validation
 
-- Errors (❌) will abort
-- Warnings (⚠️) show potential misconfigurations but allow start
+- Errors () will abort
+- Warnings () show potential misconfigurations but allow start
 
 ---
 
@@ -555,9 +555,9 @@ This document should be sufficient to build, operate, extend, and reason about t
 
 **Document Information:**
 
-**Title:** Aegis Synthesis Architecture — Technical Reference Manual  
-**Version:** 1.0  
-**Date:** November 2025  
+**Title:** Aegis Synthesis Architecture - Technical Reference Manual  
+**Version:** 1.1  
+**Date:** June 2026  
 **Status:** Alpha (Testing and Updates are welcome)
 
 ---
