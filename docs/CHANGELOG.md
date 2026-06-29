@@ -11,6 +11,13 @@
 - **Reasoning loop guard (`src/agent/react_async.py`):** The ReAct agent could get stuck repeating the same tool call (for example calling `calc` with `340 * 1` over and over) until it exhausted `max_reasoning_steps`, showing a wall of repeated Thinking/Action blocks before finally answering.
   - The agent now records each executed `(tool, args)` signature. If the model selects a call it has already run, the agent stops iterating and composes the final answer from the observations gathered so far instead of burning more steps.
   - The fallback final answer (reached by the loop guard or by exhausting `max_reasoning_steps`) is now streamed token-by-token like the normal path, rather than returned as one blocking generation.
+- **Router no longer hallucinates a fake transcript (`src/agent/react_async.py`):** The tool-routing generation produced up to 220 tokens with only generic stop sequences, so the small model would emit its one JSON tool call and then keep going, inventing `Observation:`, `Assistant:`, and `User:` lines, fake follow-up questions, made-up tool calls, and fabricated URLs.
+  - The routing call now passes tight stop sequences (a blank line and the `Observation:`/`Assistant:`/`User:`/`System:` role markers), so generation ends immediately after the single JSON object.
+- **Simple questions answered directly instead of misusing tools (`src/core/prompt.py`):** For conversational questions such as "what is your name" the model reached for `kb_add`/`kb_query` against an empty knowledge base and took an unnecessary tool step before answering.
+  - The routing guidance now leads with the rule that most messages need no tool: greetings, small talk, questions about the assistant itself, opinions, explanations, and anything answerable from existing knowledge must use `none` and answer directly, and must never use `kb_add`/`kb_query` for simple conversational questions. Added `none` few-shot examples for an identity question and a capabilities question.
+  - The tool-call schema instruction was tightened to emit exactly one JSON object and then stop, with no observation, answer, or further turns.
+- **Final answers are now plain prose, not JSON (`src/core/prompt.py`):** Primed by the JSON of the routing step, the small model sometimes returned the answer as a JSON object (for example `{"name": "Aegis", "type": "AI Assistant"}`) instead of a sentence.
+  - `final_answer_prompt` now explicitly instructs the model to answer in plain, natural English and to not output JSON, key/value pairs, code blocks, curly braces, or field names.
 
 ## v1.1.0.0 - [current]
 
