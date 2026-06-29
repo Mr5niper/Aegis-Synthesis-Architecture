@@ -1,5 +1,7 @@
 # Aegis Synthesis
 
+<img width="250" height="250" alt="image" src="https://github.com/user-attachments/assets/777b0949-44b8-4943-bec2-f632390e57d9" />
+
 A personal AI assistant that runs entirely on your own Windows PC. No cloud, no
 account, no API keys. Your conversations and data stay on your machine.
 
