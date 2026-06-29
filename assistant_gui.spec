@@ -45,11 +45,11 @@ try:
         ),
         kids=[
             StringFileInfo([StringTable('040904B0', [
-                StringStruct('CompanyName', 'David Johnson'),
+                StringStruct('CompanyName', 'Mr5niper5oft'),
                 StringStruct('FileDescription', 'Aegis Synthesis - local-first AI assistant'),
                 StringStruct('FileVersion', _ver_str),
                 StringStruct('InternalName', 'Aegis'),
-                StringStruct('LegalCopyright', 'Copyright (c) 2026 David Johnson'),
+                StringStruct('LegalCopyright', 'Copyright (c) 2026 Mr5niper5oft'),
                 StringStruct('OriginalFilename', 'Aegis.exe'),
                 StringStruct('ProductName', 'Aegis Synthesis'),
                 StringStruct('ProductVersion', _ver_str),
