@@ -99,6 +99,65 @@ def install_shutdown(p2p, sentinel, curator):
             # Windows doesn't support add_signal_handler
             signal.signal(sig, lambda s, f: _handler())
 
+# Name of the marker file Aegis drops inside its own onefile unpack dir, used
+# to identify which _MEI* temp folders belong to THIS app (see cleanup below).
+_AEGIS_MEIPASS_MARKER = ".aegis_meipass"
+
+def _mark_own_meipass():
+    """Drop a marker file in this run's onefile unpack dir so a later launch
+    can recognize an Aegis temp folder and clean it up safely.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    meipass = getattr(sys, "_MEIPASS", None)
+    if not meipass:
+        return
+    try:
+        with open(os.path.join(meipass, _AEGIS_MEIPASS_MARKER), "w") as f:
+            f.write("aegis")
+    except Exception:
+        pass
+
+def _cleanup_orphaned_meipass():
+    """Remove leftover Aegis onefile temp dirs from previous hard-killed runs.
+
+    In a onefile build the bootloader unpacks into a temporary _MEIxxxxxx
+    folder and deletes it when the process exits normally. A hard kill (Task
+    Manager, crash, power loss) skips that cleanup and orphans the folder.
+
+    IMPORTANT: every PyInstaller onefile app on the system unpacks to a
+    _MEIxxxxxx folder with no app name in it, so we must NOT delete by the
+    _MEI* name alone - that would destroy other apps' running temp dirs. We
+    only delete a folder if it contains OUR marker file (_AEGIS_MEIPASS_MARKER,
+    written by _mark_own_meipass), and never the current process's own dir.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    import tempfile, shutil, glob
+    current = getattr(sys, "_MEIPASS", None)
+    current_norm = os.path.normcase(os.path.abspath(current)) if current else None
+    temp_root = tempfile.gettempdir()
+    for path in glob.glob(os.path.join(temp_root, "_MEI*")):
+        # Skip the temp dir this running exe is using.
+        if current_norm and os.path.normcase(os.path.abspath(path)) == current_norm:
+            continue
+        # Only touch folders we can prove are Aegis's, via our marker file.
+        marker = os.path.join(path, _AEGIS_MEIPASS_MARKER)
+        if not os.path.isfile(marker):
+            continue
+        # Guard against a CONCURRENTLY running Aegis instance: its unpack dir
+        # also carries the marker, but a live instance holds its DLLs/pyd files
+        # open so they cannot be deleted. Use rmtree WITHOUT ignore_errors: if
+        # any file is locked the call raises partway and we abort for that dir,
+        # leaving it intact rather than gutting a running instance. Only a fully
+        # idle orphan (no open handles) deletes cleanly. ignore_errors is
+        # deliberately NOT used here, precisely so locked dirs are left alone.
+        try:
+            shutil.rmtree(path)
+        except Exception:
+            # In use by a live instance, or a permission issue - leave it.
+            pass
+
 def main():
     # When running as a PyInstaller-built exe, the process working directory is
     # wherever the user launched from (e.g. C:\Windows\System32 for a shortcut),
@@ -110,6 +169,12 @@ def main():
     # unaffected (sys.frozen is not set).
     if getattr(sys, "frozen", False):
         os.chdir(Path(sys.executable).parent)
+
+    # Mark this run's onefile unpack dir as ours, then sweep any Aegis temp
+    # dirs orphaned by a previous hard-killed run. Only folders containing our
+    # marker are removed, so other onefile apps' temp dirs are never touched.
+    _mark_own_meipass()
+    _cleanup_orphaned_meipass()
 
     check_optional_dependencies()
     
