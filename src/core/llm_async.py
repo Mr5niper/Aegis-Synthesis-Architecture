@@ -51,6 +51,35 @@ class AsyncLocalLLM:
             q: asyncio.Queue = asyncio.Queue(maxsize=100)
             stop_tokens, end_sentinel = stop or ["\nUser:", "\nSystem:"], object()
             loop = asyncio.get_event_loop()
+            # Internal stop flag, separate from the external Stop-button
+            # cancel_event. It is set if the consumer side is torn down (client
+            # disconnect, GeneratorExit) so the producer stops at its next token
+            # instead of running to max_tokens while holding the semaphore.
+            internal_stop = threading.Event()
+
+            async def _offer(item):
+                # Enqueue without blocking the producer thread indefinitely.
+                # If the queue is full we wait briefly for the consumer to drain
+                # (normal slowness), but give up after a short timeout so a gone
+                # consumer cannot wedge the producer. Returns False to tell the
+                # producer to stop.
+                try:
+                    q.put_nowait(item)
+                    return True
+                except asyncio.QueueFull:
+                    pass
+                # Queue full: wait up to a bit for space, rechecking stop.
+                for _ in range(50):  # ~5s total (50 x 0.1s)
+                    if internal_stop.is_set() or (cancel_event and cancel_event.is_set()):
+                        return False
+                    await asyncio.sleep(0.1)
+                    try:
+                        q.put_nowait(item)
+                        return True
+                    except asyncio.QueueFull:
+                        continue
+                # Still full after the wait: consumer is gone, stop.
+                return False
 
             def producer():
                 try:
@@ -65,12 +94,25 @@ class AsyncLocalLLM:
                         echo=False,
                         stream=True,
                     ):
-                        if cancel_event and cancel_event.is_set():
+                        if internal_stop.is_set() or (cancel_event and cancel_event.is_set()):
                             break
                         token = chunk["choices"][0]["text"]
-                        asyncio.run_coroutine_threadsafe(q.put(token), loop)
+                        # Use put_nowait via the loop. If the consumer has gone
+                        # away the queue can fill; a blocking put would wedge this
+                        # thread so it never re-checks the stop flags. On a full
+                        # queue we drop the token and stop instead of blocking.
+                        try:
+                            fut = asyncio.run_coroutine_threadsafe(_offer(token), loop)
+                            if not fut.result():
+                                break
+                        except Exception:
+                            break
                 finally:
-                    asyncio.run_coroutine_threadsafe(q.put(end_sentinel), loop)
+                    # Best-effort end sentinel; ignore if the loop/queue is gone.
+                    try:
+                        asyncio.run_coroutine_threadsafe(_offer(end_sentinel), loop).result(timeout=5)
+                    except Exception:
+                        pass
 
             # NOT a daemon thread. We MUST join it before releasing the semaphore,
             # otherwise a second caller could grab the semaphore and re-enter
@@ -84,15 +126,29 @@ class AsyncLocalLLM:
                     if item is end_sentinel:
                         break
                     if cancel_event and cancel_event.is_set():
-                        # Drain until the producer reaches its own cancel check and
-                        # emits the sentinel, so we never leave it running.
+                        # Stop button pressed: tell the producer to stop now, then
+                        # drain until it emits the sentinel so it is never left
+                        # running.
+                        internal_stop.set()
                         while True:
                             tail = await q.get()
                             if tail is end_sentinel:
                                 break
                         break
                     yield item
+            except GeneratorExit:
+                # The consumer was torn down (client disconnected, or Gradio
+                # abandoned the stream). Signal the producer to stop at its next
+                # token rather than generating all max_tokens while we hold the
+                # semaphore. Without this the join below blocks for the full
+                # generation (up to ~minutes on CPU), freezing every other
+                # model call behind the lock.
+                internal_stop.set()
+                raise
             finally:
-                # Wait for the worker to fully exit llama.cpp before the
-                # `async with self._sem` block releases the lock.
+                # Make sure the producer is told to stop, then wait for it to
+                # fully exit llama.cpp before the `async with self._sem` block
+                # releases the lock. internal_stop is idempotent; setting it here
+                # covers normal completion, cancel, and disconnect paths.
+                internal_stop.set()
                 await loop.run_in_executor(None, producer_thread.join)
