@@ -124,9 +124,25 @@ except Exception:
     pass
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+# Single-file build: all binaries, zipped modules, and data files are folded
+# into the one EXE() call below, so the output is just dist/Aegis.exe with no
+# accompanying dist/Aegis/ folder. (Previously a COLLECT step also produced a
+# one-folder build; that has been removed.)
+#
 # version=  embeds the Windows version resource built above from
 #           src/__version__.py, so right-click Properties -> Details shows it.
 # icon=     sets the executable's icon. Provide aegis.ico in the repo root.
 # UPX disabled: it can corrupt large native DLLs (torch, llama_cpp) -> launch crash.
-exe = EXE(pyz, a.scripts, a.binaries, a.zipfiles, a.datas, [], name='Aegis', console=True, upx=False, version=version_resource, icon='aegis.ico')
-coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, strip=False, upx=False, name='Aegis')
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='Aegis',
+    console=True,
+    upx=False,
+    version=version_resource,
+    icon='aegis.ico',
+)
