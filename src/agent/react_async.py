@@ -25,6 +25,16 @@ def _extract_first_json(text: str) -> Optional[str]:
             if depth == 0: return text[start:i+1]
     return None
 
+# Stop sequences for the FINAL ANSWER generation. Small models tend to keep
+# going after their reply and role-play the next turn: they write a fake user
+# message (often starting "Please answer as ..." or a new "User:" line),
+# answer it themselves, and append a fabricated "Sources:" list. Stopping on
+# these markers ends generation at the end of the actual answer.
+_ANSWER_STOP = [
+    "\nUser:", "\nUser ", "\nSystem:", "\nAssistant:",
+    "\nPlease answer as", "\nSources:", "\n\nSources:", "\nQuestion:",
+]
+
 class ReActAgent:
     def __init__(self, llm: AsyncLocalLLM, tools: AsyncToolRegistry, mem: ConversationMemory, kb: LiteVectorStore, graph: LWWGraph, system_prompt: str, max_steps: int, inbox: MemoryInbox, user_profile: UserProfile, style_adapter: StyleAdapter, distill_facts: bool = True):
         self.llm, self.tools, self.mem, self.kb, self.graph, self.inbox = llm, tools, mem, kb, graph, inbox
@@ -72,7 +82,7 @@ class ReActAgent:
             if not call or call.tool == "none":
                 full_answer = ""
                 final_prompt = final_answer_prompt(full_system_prompt, scratch, rag, "\n".join(observations), user)
-                async for tok in self.llm.stream_async(final_prompt, 512, 0.6, 0.9, 40, 1.1, cancel_event=cancel):
+                async for tok in self.llm.stream_async(final_prompt, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
                     full_answer += tok
                     yield tok
                 self.mem.add_message(session_id, user, full_answer, context="\n".join(observations))
@@ -99,7 +109,7 @@ class ReActAgent:
         # Stream the final answer using whatever observations were gathered.
         full_answer = ""
         final_prompt = final_answer_prompt(full_system_prompt, scratch, rag, "\n".join(observations), user)
-        async for tok in self.llm.stream_async(final_prompt, 512, 0.6, 0.9, 40, 1.1, cancel_event=cancel):
+        async for tok in self.llm.stream_async(final_prompt, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
             full_answer += tok
             yield tok
         self.mem.add_message(session_id, user, full_answer, context="\n".join(observations))
