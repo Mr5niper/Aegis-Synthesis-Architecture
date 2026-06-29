@@ -13,6 +13,12 @@ set "PY=py -3.13"
 set "LLAMA_CPU_INDEX=https://abetlen.github.io/llama-cpp-python/whl/cpu"
 :: PyTorch CPU wheel index.
 set "TORCH_CPU_INDEX=https://download.pytorch.org/whl/cpu"
+:: Pinned llama-cpp-python version. The abetlen CPU index only publishes a
+:: prebuilt Windows cp313 (Python 3.13) wheel for 0.3.2. Leaving the version
+:: unpinned makes pip pull a newer build that is NOT a proper cp313 CPU wheel,
+:: which crashes at model load with Windows Error 0xC000001D (illegal
+:: instruction). Pin 0.3.2 so the build is reproducible and actually runs.
+set "LLAMA_VERSION=0.3.2"
 
 :: ==========================================================================
 :: Pre-flight Check: Verify Python Version (via py launcher, not PATH)
@@ -89,7 +95,8 @@ if not defined VIRTUAL_ENV (
 
 :: 3. Upgrade pip / setuptools / wheel
 echo [STEP 3/7] Upgrading pip, setuptools, and wheel...
-python -m pip install --upgrade pip setuptools wheel
+python -m pip install --upgrade pip wheel
+python -m pip install "setuptools<82"
 if errorlevel 1 (
     echo [ERROR] Failed to upgrade pip toolchain.
     goto :error
@@ -103,24 +110,30 @@ if errorlevel 1 (
     goto :error
 )
 
-:: 5. Install llama-cpp-python from the prebuilt CPU wheel index.
-::    --prefer-binary + the dedicated index prevents pip from trying to
-::    compile the package from source (which needs MSVC + CMake and was the
-::    cause of the 'CMAKE_C_COMPILER not set' / 'nmake not found' failure).
-echo [STEP 5/7] Installing llama-cpp-python (prebuilt CPU wheel)...
-pip install --no-cache-dir llama-cpp-python --prefer-binary --extra-index-url %LLAMA_CPU_INDEX%
+:: 5. Install llama-cpp-python: PINNED prebuilt CPU wheel.
+::    --only-binary :all: forbids a from-source build (no MSVC/CMake needed).
+::    Version pinned to %LLAMA_VERSION% because that is the version the abetlen
+::    CPU index publishes a Windows cp313 wheel for; newer versions resolve to a
+::    non-cp313 build that crashes at model load (Windows Error 0xC000001D).
+echo [STEP 5/7] Installing llama-cpp-python==%LLAMA_VERSION% (prebuilt CPU wheel)...
+pip install --no-cache-dir "llama-cpp-python==%LLAMA_VERSION%" --only-binary :all: --extra-index-url %LLAMA_CPU_INDEX%
 if errorlevel 1 (
-    echo [ERROR] Failed to install a prebuilt llama-cpp-python wheel.
-    echo         If this persists, the version pinned in requirements.txt may
-    echo         not yet have a CPU wheel for this Python version.
+    echo [ERROR] Failed to install the prebuilt llama-cpp-python==%LLAMA_VERSION% wheel.
+    echo         The abetlen CPU index must have a cp313 win_amd64 wheel for this version.
     goto :error
 )
 
 :: 6. Install the remaining dependencies from requirements.txt.
 ::    torch and llama-cpp-python are already satisfied above; pip will skip
-::    them. --prefer-binary keeps everything else on prebuilt wheels too.
+::    them. --only-binary :all: forbids ANY source build: a package with no
+::    cp313 wheel fails fast ("no matching distribution") instead of invoking
+::    a C compiler (which is what caused the scikit-learn/numpy stdalign.h fail).
+::    EXCEPTION: pygetwindow and pyrect are pure-Python and ship ONLY as
+::    sdists (no wheel exists, any version). --no-binary pygetwindow,pyrect
+::    lets just those two install from sdist (a plain .py copy, no compiler),
+::    while every C-extension package still must be a prebuilt wheel.
 echo [STEP 6/7] Installing remaining dependencies from requirements.txt...
-pip install --no-cache-dir --prefer-binary -r requirements.txt
+pip install --no-cache-dir --only-binary :all: --no-binary pygetwindow,pyrect -r requirements.txt
 if errorlevel 1 (
     echo [ERROR] Failed to install dependencies from requirements.txt.
     goto :error
@@ -147,9 +160,18 @@ if errorlevel 1 (
     goto :error
 )
 
+:: Place a user-editable config.yaml next to the built exe in .\dist so the
+:: app loads it from beside the executable (see load_config in src/core/config.py).
+echo [INFO] Copying config.yaml next to the executable in .\dist ...
+copy /Y config.yaml dist\config.yaml >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to copy config.yaml into .\dist.
+    goto :error
+)
+
 echo.
 echo [SUCCESS] Build completed successfully.
-echo The application can be found in the '.\dist\Aegis' directory (run Aegis.exe).
+echo The application can be found in the '.\dist' directory (run Aegis.exe).
 echo.
 echo [NOTE] On first launch Aegis downloads the model (~2GB) into '.\models'
 echo        unless you placed a .gguf there before building.

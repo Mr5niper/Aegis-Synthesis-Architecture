@@ -100,6 +100,17 @@ def install_shutdown(p2p, sentinel, curator):
             signal.signal(sig, lambda s, f: _handler())
 
 def main():
+    # When running as a PyInstaller-built exe, the process working directory is
+    # wherever the user launched from (e.g. C:\Windows\System32 for a shortcut),
+    # NOT where Aegis.exe lives. Every path in this app (models/, data/*, keys,
+    # config.yaml) is relative, so anchor the working directory to the exe's
+    # folder. This makes the frozen app behave exactly like running from the
+    # repo root: models download into <exe dir>\models, data into <exe dir>\data,
+    # and config.yaml is read from beside the exe. Running from source is
+    # unaffected (sys.frozen is not set).
+    if getattr(sys, "frozen", False):
+        os.chdir(Path(sys.executable).parent)
+
     check_optional_dependencies()
     
     cfg = load_config()

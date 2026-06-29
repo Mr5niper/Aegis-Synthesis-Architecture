@@ -40,7 +40,17 @@ class AppConfig(BaseModel):
     paths: PathsConfig
 
 def load_config(path: str = "config.yaml") -> AppConfig:
-    with open(path, "r") as f: data = yaml.safe_load(f)
+    import sys
+    # When running as a PyInstaller-built exe, the working directory is wherever
+    # the user launched from, not where the exe lives. Look for config.yaml next
+    # to the executable (e.g. dist\config.yaml beside dist\Aegis.exe), NOT inside
+    # the temporary _MEIPASS extraction dir, so the user can edit it.
+    if getattr(sys, "frozen", False):
+        exe_dir_cfg = Path(sys.executable).parent / "config.yaml"
+        if exe_dir_cfg.is_file():
+            path = str(exe_dir_cfg)
+    with open(path, "r") as f:
+        data = yaml.safe_load(f)
     return AppConfig(**data)
 
 def ensure_dirs(cfg: AppConfig):
