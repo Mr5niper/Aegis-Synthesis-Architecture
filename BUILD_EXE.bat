@@ -152,6 +152,14 @@ if not exist "src\__init__.py" type nul > "src\__init__.py"
 if not exist .\models mkdir .\models
 if not exist .\data   mkdir .\data
 
+:: The spec references aegis.ico for the executable icon. PyInstaller fails
+:: with a confusing error if it is missing, so check for it up front.
+if not exist aegis.ico (
+    echo [ERROR] aegis.ico not found in the project root.
+    echo         The build needs an icon file named aegis.ico next to assistant_gui.spec.
+    goto :error
+)
+
 :: 7. Build with PyInstaller using the project spec.
 echo [STEP 7/7] Building executable with PyInstaller (this may take a while)...
 pyinstaller --clean --noconfirm assistant_gui.spec
