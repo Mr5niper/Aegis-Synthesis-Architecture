@@ -48,6 +48,7 @@ class ReActAgent:
         facts = self.graph.facts_for_prompt(8)
         if facts: rag = (rag + "\n\nPersonal facts:\n" + facts).strip()
         observations = []
+        seen_actions = set()  # signatures of (tool, args) already executed
 
         for step in range(self.max_steps):
             if cancel.is_set():
@@ -72,6 +73,15 @@ class ReActAgent:
                 await self._maybe_distill_facts(user, full_answer)
                 return
 
+            # Loop guard: if the model picks a tool call it has already run
+            # (same tool + same args), it is stuck repeating itself instead of
+            # answering. Stop iterating and compose the final answer from the
+            # observations gathered so far rather than burning more steps.
+            sig = f"{call.tool}:{json.dumps(call.args, sort_keys=True)}"
+            if sig in seen_actions:
+                break
+            seen_actions.add(sig)
+
             thought = call.rationale or "Planning next step."
             yield f"\n---\n*Thinking:* {thought}\n*Action:* `{call.tool}` {call.args}\n---\n"
 
@@ -79,10 +89,15 @@ class ReActAgent:
             observations.append(f"{call.tool} -> {obs[:800]}")
             scratch += f"\nAssistant: {json.dumps(call.model_dump(exclude_none=True))}\nObservation: {obs}"
 
-        final_answer_text = await self.llm.generate_async(final_answer_prompt(full_system_prompt, scratch, rag, "\n".join(observations), user), 512, 0.6, 0.9, 40, 1.1)
-        yield final_answer_text
-        self.mem.add_message(session_id, user, final_answer_text, context="\n".join(observations))
-        await self._maybe_distill_facts(user, final_answer_text)
+        # Reached here by exhausting max_steps or by the loop guard above.
+        # Stream the final answer using whatever observations were gathered.
+        full_answer = ""
+        final_prompt = final_answer_prompt(full_system_prompt, scratch, rag, "\n".join(observations), user)
+        async for tok in self.llm.stream_async(final_prompt, 512, 0.6, 0.9, 40, 1.1, cancel_event=cancel):
+            full_answer += tok
+            yield tok
+        self.mem.add_message(session_id, user, full_answer, context="\n".join(observations))
+        await self._maybe_distill_facts(user, full_answer)
 
     async def _maybe_distill_facts(self, user: str, reply: str):
         # Skipping this saves one full LLM generation per chat turn.
