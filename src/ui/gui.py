@@ -105,6 +105,7 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
                 # FIX #1: Double Scrollbar Fix (using CSS)
                 chatbot = gr.Chatbot(
                     label="Conversation",
+                    type="messages",
                     height=600, 
                     container=True,
                     show_copy_button=True,
@@ -188,11 +189,17 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
             md += f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
             md += "---\n\n"
             
-            for i, (user_msg, assistant_msg) in enumerate(history, 1):
-                md += f"## Turn {i}\n\n"
-                md += f"**You:** {user_msg}\n\n"
-                md += f"**Aegis:** {assistant_msg}\n\n"
-                md += "---\n\n"
+            turn = 0
+            for m in history:
+                role = m.get("role")
+                content = m.get("content", "")
+                if role == "user":
+                    turn += 1
+                    md += f"## Turn {turn}\n\n"
+                    md += f"**You:** {content}\n\n"
+                elif role == "assistant":
+                    md += f"**Aegis:** {content}\n\n"
+                    md += "---\n\n"
             
             # Save to file
             filename = f"conversation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
@@ -201,55 +208,74 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
             filepath.write_text(md, encoding='utf-8')
             
             return f"✅ Exported to: {filename}"
-        # FIX #2 HANDLER: Updated Rating Handler
+        # Rating handler. Returns exactly two outputs: the feedback-status text
+        # and the correction box visibility. It does NOT write back to rating_btn
+        # (doing so retriggers .change with rating=None, which blanked the status
+        # message and made it look like nothing happened).
         def handle_rating(rating, history, correction_text):
-            if not history or not trainer:
-                return "⚠️ No conversation history available.", gr.update(visible=False), gr.update(value=None)
-            
-            if not rating:  # No rating selected
-                return "", gr.update(visible=False), gr.update(value=None)
-            
-            last_user, last_assistant = history[-1]
-            
+            if not rating:  # nothing selected (e.g. radio was cleared)
+                return "", gr.update(visible=False)
+
+            if not history:
+                return "⚠️ No conversation yet to rate.", gr.update(visible=False)
+
+            last_user = next(
+                (m.get("content", "") for m in reversed(history) if m.get("role") == "user"), ""
+            )
+            last_assistant = next(
+                (m.get("content", "") for m in reversed(history) if m.get("role") == "assistant"), ""
+            )
+
             if rating == "✏️ Needs Correction":
                 if correction_text and correction_text.strip():
-                    trainer.log_correction(
-                        last_user,
-                        last_assistant,
-                        correction_text.strip(),
-                        "user_correction"
-                    )
-                    return "✅ Correction logged! I'll learn from this.", gr.update(visible=False), gr.update(value=None)
+                    if trainer:
+                        trainer.log_correction(
+                            last_user,
+                            last_assistant,
+                            correction_text.strip(),
+                            "user_correction",
+                        )
+                        return "✅ Correction logged! I'll learn from this.", gr.update(visible=False)
+                    return "⚠️ Correction training is not enabled.", gr.update(visible=False)
                 else:
-                    return "⚠️ Please enter your correction above.", gr.update(visible=True), gr.update(value=rating)
-            
+                    # Reveal the correction box and wait for the user to type + submit.
+                    return "✏️ Enter your correction below, then press Enter.", gr.update(visible=True)
+
             elif rating == "👍 Good":
-                # Could log positive feedback here
-                return "✅ Thanks! Glad I could help.", gr.update(visible=False), gr.update(value=None)
-            
+                return "✅ Thanks! Glad I could help.", gr.update(visible=False)
+
             elif rating == "👎 Bad":
-                # Could log negative feedback here
-                return "📝 Noted. I'll try to improve!", gr.update(visible=False), gr.update(value=None)
-            
-            return "", gr.update(visible=False), gr.update(value=None)
+                return "📝 Noted. I'll try to improve!", gr.update(visible=False)
+
+            return "", gr.update(visible=False)
             
         # FIX #2: Updated Chat Flow to handle message disappearance
         async def user_turn(message, history, s, c):
             c.clear()
-            # FIX: Use placeholder message so the user message remains visible while processing
-            return history + [(message, "⏳ Thinking...")], "", s, c 
+            # Messages format: append the user turn, then an assistant placeholder
+            # that gets overwritten as the response streams in.
+            return history + [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": "⏳ Thinking..."},
+            ], "", s, c 
             
         async def bot_turn(history, s, c):
             agent = agent_factory()
             
             current_response = ""
             
+            # The latest user message is the entry before the assistant
+            # placeholder appended in user_turn.
+            user_message = next(
+                (m.get("content", "") for m in reversed(history) if m.get("role") == "user"), ""
+            )
+            
             try:
-                # FIX: Accumulate response and overwrite history[-1][1] completely, 
-                # ensuring the "Thinking..." placeholder is cleared immediately by the stream.
-                async for chunk in agent.run(s, history[-1][0], c):
+                # Accumulate response and overwrite the last assistant message's
+                # content, clearing the "Thinking..." placeholder on first chunk.
+                async for chunk in agent.run(s, user_message, c):
                     current_response += chunk
-                    history[-1] = (history[-1][0], current_response)
+                    history[-1] = {"role": "assistant", "content": current_response}
                     yield history
             except Exception as e:
                 error_msg = f"\n\n❌ **Error:** {str(e)}\n\n"
@@ -260,7 +286,7 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
                     error_msg += "- Switching to the 'large' model (8K context)\n"
                 
                 # Append error message to whatever partial response was streamed (current_response)
-                history[-1] = (history[-1][0], current_response + error_msg)
+                history[-1] = {"role": "assistant", "content": current_response + error_msg}
                 yield history
         
         # Wire up chat flow
@@ -298,23 +324,19 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
             outputs=[rating_output],
             queue=False
         )
-        # Wire up Rating flow 
-        rating_btn.change(
-            lambda r: gr.update(visible=(r == "✏️ Needs Correction")),
-            inputs=[rating_btn],
-            outputs=[correction_box],
-            queue=False
-        )
+        # Wire up Rating flow. A single change-handler writes the feedback status
+        # and toggles the correction box. It deliberately does NOT output back to
+        # rating_btn (that retriggered change and wiped the status message).
         rating_btn.change(
             handle_rating,
             inputs=[rating_btn, chatbot, correction_box],
-            outputs=[rating_output, correction_box, rating_btn],
+            outputs=[rating_output, correction_box],
             queue=False
         )
         correction_box.submit(
             handle_rating,
             inputs=[rating_btn, chatbot, correction_box],
-            outputs=[rating_output, correction_box, rating_btn],
+            outputs=[rating_output, correction_box],
             queue=False
         )
         async def suggestions_stream():
@@ -345,4 +367,10 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
         collab_approve_btn.click(approve_req_handler, inputs=[req_id_box], outputs=[req_id_box], queue=False)
         collab_deny_btn.click(deny_req_handler, inputs=[req_id_box], outputs=[req_id_box], queue=False)
         
-    demo.queue().launch()
+    demo.queue().launch(
+        server_name="127.0.0.1",
+        server_port=7860,
+        show_api=False,        # avoid gradio_client get_api_info() schema bug ('bool' is not iterable)
+        show_error=True,
+        inbrowser=True,
+    )
