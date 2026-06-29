@@ -243,8 +243,8 @@ After 6 rounds, Gemini Flash 2.0 acknowledged GPT-5's implementation as superior
 ### 4.4 Iterative Cross-Validation
 
 **Pattern:** No single AI model makes final decisions. All critical assessments validated by at least two models from different families:
-- GPT-5 → Claude Sonnet 4.5 validation
-- Claude Sonnet 4.5 → GPT-5 validation
+- GPT-5 -> Claude Sonnet 4.5 validation
+- Claude Sonnet 4.5 -> GPT-5 validation
 - Gemini Flash 2.0 implementations verified by GPT-5
 
 This creates a **consensus-driven quality gate** resistant to individual model hallucinations or blind spots.
@@ -291,25 +291,25 @@ The human developer's role was exclusively **meta-engineering**:
 - Security primitives (Ed25519, Curve25519, E2EE)
 
 **Independent Review Results:**
-- ✅ Architectural consistency: Pass
-- ✅ Security model: Pass (with noted best practices)
-- ✅ Async correctness: Pass
-- ✅ Error handling: Pass
-- ✅ Documentation: Pass
-- ✅ Testing: Ongoing validation through active use
+-  Architectural consistency: Pass
+-  Security model: Pass (with noted best practices)
+-  Async correctness: Pass
+-  Error handling: Pass
+-  Documentation: Pass
+-  Testing: Ongoing validation through active use
 
 ### 6.2 Functional Validation
 
 **Deployment Test:**
 - System successfully launched on first attempt (after environmental fixes)
 - All core features operational:
-  - Local LLM inference ✅
-  - RAG with vector store ✅
-  - Tool-use via ReAct agent ✅
-  - Proactive agents ✅
-  - Memory inbox ✅
-  - Web UI ✅
-  - Model switching ✅
+  - Local LLM inference 
+  - RAG with vector store 
+  - Tool-use via ReAct agent 
+  - Proactive agents 
+  - Memory inbox 
+  - Web UI 
+  - Model switching 
 
 **Issues Identified:**
 All issues were **environmental or dependency-related**, not architectural:
@@ -349,19 +349,19 @@ For a 3-person team (senior engineer, mid-level engineer, junior engineer):
 - Deployment and debugging: 1.5 hours
 - **Total: 5.5 hours**
 
-**Productivity Multiplier: 77x** (425 ÷ 5.5)
+**Productivity Multiplier: 77x** (425 / 5.5)
 
 ### 7.3 Cost Analysis
 
 **Traditional Approach:**
-- Senior engineer ($150/hr × 150 hrs) = $22,500
-- Mid-level engineer ($100/hr × 175 hrs) = $17,500
-- Junior engineer ($60/hr × 100 hrs) = $6,000
+- Senior engineer ($150/hr x 150 hrs) = $22,500
+- Mid-level engineer ($100/hr x 175 hrs) = $17,500
+- Junior engineer ($60/hr x 100 hrs) = $6,000
 - **Total: $46,000**
 
 **AI-Orchestrated Approach:**
 - API costs (estimated, 3 frontier models): ~$50-100
-- Human time (5.5 hrs × $150/hr): $825
+- Human time (5.5 hrs x $150/hr): $825
 - **Total: ~$900**
 
 **Cost Reduction: 98%**
@@ -526,7 +526,7 @@ Human verification of AI outputs required more time than initially anticipated. 
 ### 10.3 Unexpected Discoveries
 
 **AI Models Accept Defeat:**
-Gemini Flash 2.0's explicit acknowledgment of GPT-5's superiority was unexpected and valuable—signaled genuine convergence rather than arbitrary round limits.
+Gemini Flash 2.0's explicit acknowledgment of GPT-5's superiority was unexpected and valuable-signaled genuine convergence rather than arbitrary round limits.
 
 **Documentation Quality Exceeds Typical:**
 AI-generated documentation was more comprehensive and better structured than typical human-written documentation, likely because:
@@ -779,28 +779,28 @@ troubleshooting guide, and configuration reference."
 **Mandatory Checkpoints:**
 
 1. **Architecture Review:**
-   - ✅ All major components specified
-   - ✅ Module boundaries clear
-   - ✅ Security model defined
-   - ✅ Technology stack justified
+   -  All major components specified
+   -  Module boundaries clear
+   -  Security model defined
+   -  Technology stack justified
 
 2. **Implementation Verification:**
-   - ✅ Code compiles/runs
-   - ✅ All modules present
-   - ✅ No placeholder code
-   - ✅ Consistent patterns
+   -  Code compiles/runs
+   -  All modules present
+   -  No placeholder code
+   -  Consistent patterns
 
 3. **Security Validation:**
-   - ✅ Authentication/authorization present (if applicable)
-   - ✅ Input validation implemented
-   - ✅ Secrets not hardcoded
-   - ✅ Encryption properly implemented (if applicable)
+   -  Authentication/authorization present (if applicable)
+   -  Input validation implemented
+   -  Secrets not hardcoded
+   -  Encryption properly implemented (if applicable)
 
 4. **Integration Testing:**
-   - ✅ Dependencies install cleanly
-   - ✅ Configuration loads correctly
-   - ✅ Core functionality works
-   - ✅ Error handling graceful
+   -  Dependencies install cleanly
+   -  Configuration loads correctly
+   -  Core functionality works
+   -  Error handling graceful
 
 **Failure Response:**
 If any gate fails, return to appropriate phase and iterate.
@@ -867,8 +867,8 @@ For production systems:
 
 **Carbon Footprint:**
 Multiple frontier model API calls have environmental costs:
-- GPT-5: ~500g CO₂e per million tokens (estimated)
-- This project: ~10M tokens total = ~5kg CO₂e
+- GPT-5: ~500g CO2e per million tokens (estimated)
+- This project: ~10M tokens total = ~5kg CO2e
 - Comparable to ~20 miles driven in average car
 
 **Mitigation Strategies:**
@@ -905,17 +905,17 @@ This methodology's 90x productivity multiplier raises concerns about:
 - **System Complexity:** 15 integrated subsystems
 
 **Qualitative Achievements:**
-- ✅ Production-quality architecture
-- ✅ Comprehensive security model
-- ✅ Robust async patterns
-- ✅ Extensive documentation
-- ✅ Successful deployment and operation
+-  Production-quality architecture
+-  Comprehensive security model
+-  Robust async patterns
+-  Extensive documentation
+-  Successful deployment and operation
 
 **Limitations:**
-- ⚠️ No automated tests
-- ⚠️ Environmental issues required debugging
-- ⚠️ Requires frontier model access
-- ⚠️ Human technical expertise still essential
+-  No automated tests
+-  Environmental issues required debugging
+-  Requires frontier model access
+-  Human technical expertise still essential
 
 ### 15.2 Key Insights
 
@@ -933,7 +933,7 @@ The developer's value transitions from direct implementation to:
 - Environmental debugging and deployment
 
 **4. Architecture Remains Human Domain**
-While AI models excel at implementation, the highest-value activity—defining what to build and why—remains fundamentally human.
+While AI models excel at implementation, the highest-value activity-defining what to build and why-remains fundamentally human.
 
 **5. Environmental Complexity Persists**
 AI models struggle with environmental pragmatics (dependencies, platform differences, version compatibility). This debugging remains human-intensive.
@@ -1041,12 +1041,12 @@ Aegis Synthesis Architecture represents a successful proof-of-concept that **mul
 
 The development process demonstrated:
 
-**✅ Viability**: Complex systems can be built through AI orchestration  
-**✅ Efficiency**: 77x productivity improvement over traditional methods  
-**✅ Quality**: Competitive pressure produces robust implementations  
-**✅ Reproducibility**: Clear patterns emerged that can be replicated  
+** Viability**: Complex systems can be built through AI orchestration  
+** Efficiency**: 77x productivity improvement over traditional methods  
+** Quality**: Competitive pressure produces robust implementations  
+** Reproducibility**: Clear patterns emerged that can be replicated  
 
-**⚠️ Limitations**: Environmental issues, testing gaps, and required human expertise
+** Limitations**: Environmental issues, testing gaps, and required human expertise
 
 ### 16.3 Historical Significance
 
@@ -1082,7 +1082,7 @@ The implications are profound:
 Can one person, orchestrating AI models competitively, produce professional-grade software in hours instead of months?
 
 **The Answer:**  
-Yes—with caveats.
+Yes-with caveats.
 
 The methodology works for well-defined systems in established domains. It requires:
 - Strategic thinking and architectural knowledge
@@ -1095,6 +1095,120 @@ But when these conditions are met, the productivity gains are revolutionary.
 **The developer's role has fundamentally changed from writing code to directing artificial minds that write code.**
 
 This is not the future of software development. **This is the present.**
+
+---
+
+## 17. Phase 10 - Real-World Deployment Hardening (June 2026)
+
+> **Addendum note.** Sections 1-16 documented the *creation* of Aegis Synthesis through competitive multi-agent orchestration in November 2025 and concluded that the system "successfully launched and validated." That conclusion was true in the narrow sense the orchestration process could verify, and incomplete in the sense that matters to an end user: a clean checkout, installed and built on a fresh Windows machine with the then-current toolchain, did not produce a running program. This section is the honest accounting of the work required to close that gap. It is a direct empirical confirmation of the limitation this very study predicted in section 8.3 and section 6.2 - and is therefore documented to the same standard as the generative phases.
+
+**Phase Duration:** ~1 working day (single human + single AI assistant, interactive)
+**Code touched:** 5 files (build script, PyInstaller spec, requirements manifest, 2 source modules)
+**Architectural changes:** 0
+
+### 17.1 The Misconception the Generative Phases Encoded
+
+The competitive rounds optimized for one thing: a self-consistent, architecturally sound codebase that all participating models agreed was correct. Nothing in that loop ever *executed the program on the target platform*. The models reasoned about code; they did not run it, install its dependencies, or build it into an executable.
+
+This produced a codebase that was internally coherent but rested on a set of **unverified environmental assumptions**, each individually reasonable and collectively fatal:
+
+1. That the libraries named in `requirements.txt` would install on the target Python version.
+2. That "use a recent version" (`>=` version floors) was a safe default.
+3. That a Gradio UI written against one major version would run on whatever Gradio happened to install.
+4. That paths relative to the working directory would resolve correctly inside a frozen executable.
+5. That a removed Python standard-library module would still be importable.
+
+None of these are algorithm bugs. Every one is an *environmental contract* that can only be validated by actually building and running on the target - exactly the step the orchestration methodology structurally omits.
+
+### 17.2 Failure Inventory and Resolutions
+
+The following is the complete chain of defects encountered between "checked-out source" and "working standalone .exe," in the order they surfaced. Each was a separate wall; each had to be cleared before the next became visible. This sequential unmasking is itself characteristic of environmental debugging: unlike logic bugs, defect N+1 is invisible until defect N is resolved, so the total scope is hidden at the outset.
+
+#### 17.2.1 Source-compilation cascade from unpinned dependencies
+**Symptom:** `pip install` aborted while building NumPy, then scikit-learn, from source with `fatal error C1083: Cannot open include file: 'stdalign.h'`.
+**Root cause:** `requirements.txt` used `>=` floors rather than pins. On Python 3.13 those floors resolved to versions predating the existence of Python-3.13 (cp313) binary wheels. With no wheel available, pip fell back to compiling C/C++ extensions from source, which requires a full MSVC + Windows SDK toolchain and fails on a machine not configured as a C build host.
+**Why orchestration missed it:** The models selected plausible, real versions but had no mechanism to check, per package, whether a prebuilt wheel exists *for the specific interpreter ABI on the target OS*. Wheel availability is a moving, platform-specific fact on PyPI's file index, not in library docs or training data.
+**Resolution:** Every dependency pinned (`==`) to a version verified to publish a cp313 Windows wheel, so installation is a binary download and **nothing compiles**. NumPy is intentionally *not* pinned - it arrives transitively from PyTorch at a known-good wheel version, and pinning it separately reintroduced the conflict.
+
+#### 17.2.2 Build script permitted source builds
+**Symptom:** Even after pinning, a single sdist-only package could silently trigger a 20-minute compile-then-fail cycle.
+**Root cause:** The install step used `--prefer-binary`, which prefers wheels but *falls back* to source when none is found - the exact fallback behind 17.2.1.
+**Resolution:** Changed to `--only-binary :all:`, forbidding source builds entirely: a package lacking a wheel now fails instantly with a clear "no matching distribution" message instead of invoking a compiler. A scoped exception (`--no-binary pygetwindow,pyrect`) was required because those two packages are pure-Python and ship *only* as sdists - no wheel at any version, but no compiled code either, so installing them from sdist is a safe file copy. The distinction "sdist that compiles C" vs. "sdist that is pure Python" does not surface until the installer refuses the package.
+
+#### 17.2.3 Framework major-version / transitive-dependency crash
+**Symptom:** The application installed and launched, loaded both models, started its web server, then crashed on every request with `TypeError: argument of type 'bool' is not iterable` originating deep inside `gradio_client`.
+**Root cause:** A two-layer version interaction. The pinned Gradio (4.44.1) bundled a `gradio_client` whose API-schema generator could not handle the JSON-schema output of the Pydantic version the unpinned resolver pulled in (2.11+); the generator assumed a dict where Pydantic 2.11 now emits a bare boolean (documented in gradio issues #10662, #11084).
+**Why orchestration missed it:** This defect does not exist in any single file. It is an emergent product of three independently-versioned packages (Gradio, gradio_client, Pydantic) interacting at runtime. No amount of reading the Aegis source reveals it; it appears only when the specific installed combination executes a specific code path (building the API schema at server startup).
+**Resolution:** Migrated the UI to Gradio 5.50.0, where the defect is fixed upstream - deliberately chosen over pinning Pydantic *backward* to dodge the bug. Moving forward to the maintained release line avoids accumulating technical debt. The migration required the source change in 17.2.5.
+
+#### 17.2.4 Removed standard-library module
+**Symptom:** Before the Gradio crash could even be reached, import failed with `ModuleNotFoundError: No module named 'audioop'`, triggered by Gradio's transitive dependency on `pydub`.
+**Root cause:** Python 3.13 *removed* the `audioop` module from the standard library. `pydub` still imports it unconditionally. The code used no audio feature; the import was incidental, pulled in three layers down the dependency chain.
+**Why orchestration missed it:** "Targeting Python 3.13" was a stated goal, but knowledge of which stdlib modules 3.13 *removed* is exactly the kind of recent, specific platform fact training data lags on - and the triggering package is not even a direct dependency.
+**Resolution:** Added `audioop-lts`, the official backport that re-supplies the module for 3.13+. (On the final Gradio 5 build it is pulled in automatically as a Gradio dependency, but it was identified and added explicitly during diagnosis.)
+
+#### 17.2.5 UI written against a superseded framework API
+**Symptom:** Under Gradio 5, the chat component's data contract changed.
+**Root cause:** The generated `gui.py` used Gradio 4's tuple-pair chat history format (`(user_msg, bot_msg)`); Gradio 5 defaults the chat component to a structured message format (`{"role": ..., "content": ...}`).
+**Resolution:** Converted the chat component and all four functions that touch history (`user_turn`, `bot_turn`, `export_conversation`, and the rating handler) to the messages format. This was the only *source* change driven by the migration; the rest of the UI (layout, callbacks, theming) carried forward unchanged.
+
+#### 17.2.6 Frozen-executable working-directory assumption
+**Symptom:** The application worked when launched from its own directory but created its `models/` folder - and re-downloaded ~6 GB of weights - in whatever directory it happened to be launched from (e.g. a shortcut's start directory).
+**Root cause:** Every path in the application (`models/`, `data/`, `config.yaml`, key stores) is relative to the current working directory. Correct when run from source in the repo root; wrong when run as a PyInstaller executable launched from elsewhere, where the working directory is not the executable's directory. An earlier fix had made `config.yaml` frozen-aware but had not generalized the principle.
+**Resolution:** A single frozen-aware `os.chdir(exe directory)` at the start of `main()`. When frozen, the process anchors its working directory to the executable's location, so *all* relative paths resolve next to the .exe exactly as they resolve next to the repo root from source. Running from source is unaffected.
+
+#### 17.2.7 Build packaging the runtime data folders
+**Symptom:** Each build copied ~6 GB of model weights into the build output, making builds enormous and slow.
+**Root cause:** The PyInstaller spec's `datas` list included the `models/` and `data/` directories - *runtime-managed* folders (models downloaded on first launch; data written during use), not build inputs.
+**Resolution:** Removed `models/` and `data/` from the spec's `datas`. They are created next to the executable at runtime (per 17.2.6); only `config.yaml` is placed beside the executable by the build script.
+
+### 17.3 The Pattern Behind Every Defect
+
+The seven defects are not seven unrelated bugs. They are seven instances of **one** category: a contract between the program and its execution environment that the code stated implicitly and that no participant in the generative process ever verified by execution.
+
+| # | Implicit environmental contract | How it was validated in Phase 10 |
+|---|---------------------------------|----------------------------------|
+| 1 | "These library versions install on this interpreter" | Checked each pin against PyPI's wheel index for cp313/Windows |
+| 2 | "The installer will use binaries" | Forced binary-only install; made source builds fail loud |
+| 3 | "These three packages cooperate at runtime" | Ran the server until the schema path executed |
+| 4 | "This stdlib module exists" | Hit the ImportError on the target interpreter |
+| 5 | "The UI matches the installed framework" | Ran the UI against the actually-installed major version |
+| 6 | "Relative paths resolve correctly when frozen" | Launched the .exe from a foreign directory |
+| 7 | "The build inputs are correct" | Inspected the size and contents of the build output |
+
+Every one required *executing the artifact in its target environment*. None could be discovered by reasoning about the source, however many capable models reasoned about it. This is the precise boundary of the orchestration methodology, and Phase 10 maps it exactly.
+
+### 17.4 Implications for the Productivity Thesis
+
+The 77x multiplier claimed in section 7 was computed on generation time alone. Phase 10 requires that figure be re-framed, not retracted.
+
+**What stands:** The architecture required *zero* changes. Across a full day of deployment debugging, not a single defect was architectural, algorithmic, or logical. The competitive generative process did produce a sound, coherent system - the structural claim of this study holds completely. Module boundaries, the async model, the security primitives, the agent loop: all correct, all untouched.
+
+**What must be corrected:** "Successful launch and validation" in the generative phases described validation *by inter-model consensus*, not validation *by execution on target*. These are different guarantees, and the difference is not cosmetic - a system that every model agrees is correct, and that does not run, is not done. The original 1.5-hour "deployment and debugging" estimate (section 5.1, section 6.2) undercounted the environmental layer by most of a working day, and that day required sustained human direction, live error reading, and external fact-checking (querying the live package index, reading current framework issue trackers) that no amount of additional generation could substitute for.
+
+**The honest multiplier** is therefore best stated as two numbers:
+- *Generation-to-coherent-codebase:* dramatic acceleration, consistent with section 7.
+- *Coherent-codebase-to-running-product:* ordinary, human-paced, execution-driven debugging that the methodology does not accelerate and, to a degree, *defers and concentrates*. Because the generative process never executes, it cannot surface environmental defects incrementally; they arrive all at once, stacked, at deployment.
+
+This is arguably the most useful single lesson of the entire project: **multi-agent orchestration compresses the generation of correct-by-reasoning code, and in doing so it relocates - rather than removes - the environmental-integration cost into one concentrated phase at the end.** Planning for that phase as first-class work, rather than a footnote, is the corrected methodology.
+
+### 17.5 Methodology Amendment
+
+Phase 10 adds two mandatory steps to the reproducibility template (section 13.2):
+
+**Phase 0.5 - Environmental Contract Specification** (before competitive implementation). The human specifies, and the models must honor: the exact target interpreter version and ABI; a hard rule that all dependencies are pinned to versions with verified binary wheels for that target; the exact major version of every user-facing framework (e.g. "Gradio 5.x", not "Gradio"); and that the application must not assume its working directory.
+
+**Execution Gate** (after generation, before declaring success). The artifact is installed from a clean environment on the target platform, built into its distributable form, and the distributable is executed from a *foreign* working directory. Only then is the system "validated."
+
+Inter-model consensus validates *coherence*. Only execution validates *operation*. The original methodology conflated the two; the amended methodology separates them and requires both.
+
+### 17.6 Final Status
+
+After Phase 10, Aegis Synthesis runs as documented - both from source and as a standalone Windows executable that loads its models, serves its UI, holds a conversation, and resolves all of its data correctly relative to the executable regardless of launch context. The system the generative phases designed is, at last, the system that runs.
+
+The architecture was right the whole time. The environment had the last word - exactly as this study warned it would.
+
+*Phase 10 was performed through interactive human-AI debugging (single assistant with live tool access to the file system, the package index, and current framework issue trackers) - a working mode distinct from the competitive multi-agent generation that produced the system. Generation was a parallel competition; hardening was a serial, execution-driven dialogue. Each suited its phase.*
 
 ---
 
@@ -1202,11 +1316,11 @@ This is not the future of software development. **This is the present.**
 
 **ReAct Agent**: AI reasoning pattern combining reasoning steps with action execution (Reason + Act)
 
-**CRDT**: Conflict-free Replicated Data Type—data structure enabling distributed synchronization
+**CRDT**: Conflict-free Replicated Data Type-data structure enabling distributed synchronization
 
-**E2EE**: End-to-End Encryption—encryption where only communicating parties can decrypt
+**E2EE**: End-to-End Encryption-encryption where only communicating parties can decrypt
 
-**RAG**: Retrieval-Augmented Generation—combining knowledge retrieval with language model generation
+**RAG**: Retrieval-Augmented Generation-combining knowledge retrieval with language model generation
 
 ---
 
@@ -1291,13 +1405,14 @@ Review each provider's commercial use policies and acceptable use policies.
 
 **Title:** Aegis Synthesis: A Case Study in Multi-Agent AI Orchestration for Software Development
 
-**Version:** 1.0  
+**Version:** 1.1  
 **Date:** November 2025  
 **Author:** David Johnson  
 **Contact:** davidx.l.johnson@gmail.com
 
 **Document History:**
 - v1.0 (November 2025): Initial release
+- v1.1 (June 2026): Added section 17 (Phase 10 - Real-World Deployment Hardening)
 
 **Acknowledgments:**
 - Claude Sonnet 4.5 (Anthropic): Architecture and documentation
