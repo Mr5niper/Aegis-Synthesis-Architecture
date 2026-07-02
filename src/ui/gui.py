@@ -13,6 +13,7 @@ from .consent import ConsentBroker
 from ..learning.lora_trainer import LoRATrainer
 from ..learning.style_adapter import StyleAdapter
 from ..__version__ import get_version_info # Added for versioning
+from ..core.config import update_web_access, AppConfig
 AUDIT_FILE = Path("data/user_data/inbox_approved.jsonl")
 def _inbox_choices(inbox: MemoryInbox):
     return [(f"{s} {r} {d}", i) for i, s, r, d in inbox.list_pending()]
@@ -80,7 +81,71 @@ def mount_training_viewer(root_blocks: gr.Blocks, trainer: LoRATrainer):
         
         refresh_btn.click(update_status, outputs=[status_text, script_text])
         root_blocks.load(update_status, outputs=[status_text, script_text])      
-def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contacts, kairos, inbox: MemoryInbox, graph: LWWGraph, sync_service: SyncService, broker: ConsentBroker = None, identity=None, trainer: LoRATrainer = None, style_adapter: StyleAdapter = None, model_names: list[str] = None, on_switch_model=None):
+def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
+    """Panel to view/edit which web domains the assistant may fetch.
+
+    Two modes:
+      - Allow all sites: represented internally as an EMPTY allow list, which
+        the policy and fetch layer treat as "no restriction".
+      - Restrict to a list: only the listed domains (and their subdomains) may
+        be fetched.
+    Changes apply immediately to the running app and are saved to config.yaml.
+    """
+    current = list(cfg.assistant.allow_domains or [])
+    start_allow_all = len(current) == 0
+
+    with gr.Accordion("Web Access", open=False):
+        gr.Markdown(
+            "Control which websites Aegis may open when it searches or fetches a "
+            "page. Turn on **Allow all sites** for unrestricted access, or leave "
+            "it off and list the allowed domains (one per line, e.g. `github.com`). "
+            "Subdomains are included automatically."
+        )
+        allow_all_cb = gr.Checkbox(
+            label="Allow all sites (no domain restriction)",
+            value=start_allow_all,
+        )
+        domains_box = gr.Textbox(
+            label="Allowed domains (one per line)",
+            value="\n".join(current),
+            lines=6,
+            placeholder="github.com\nraw.githubusercontent.com\nwikipedia.org",
+            interactive=not start_allow_all,
+        )
+        with gr.Row():
+            save_btn = gr.Button("Save Web Access", variant="primary")
+        web_status = gr.Textbox(label="Status", interactive=False, lines=1)
+        gr.Markdown(
+            "_Note: saving rewrites `config.yaml`. Your settings are preserved; "
+            "hand-written comments in the file are not._"
+        )
+
+        # Grey out the list when Allow-all is on.
+        def _toggle_all(is_all):
+            return gr.update(interactive=not is_all)
+        allow_all_cb.change(_toggle_all, inputs=[allow_all_cb], outputs=[domains_box], queue=False)
+
+        def _save(is_all, text):
+            domains = [line for line in (text or "").splitlines()]
+            try:
+                saved_path = update_web_access(cfg, policy, bool(is_all), domains)
+            except Exception as e:
+                return gr.update(), f"Error saving: {e}"
+            # Reflect the normalized result back into the box.
+            normalized = list(cfg.assistant.allow_domains)
+            if is_all:
+                msg = "Saved. All sites are now allowed (no restriction)."
+            else:
+                if normalized:
+                    msg = "Saved. Allowing %d domain(s)." % len(normalized)
+                else:
+                    msg = ("Saved, but the list is empty, so ALL sites are allowed. "
+                           "Add domains or this is effectively allow-all.")
+            return gr.update(value="\n".join(normalized)), msg
+
+        save_btn.click(_save, inputs=[allow_all_cb, domains_box], outputs=[domains_box, web_status], queue=False)
+
+def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contacts, kairos, inbox: MemoryInbox, graph: LWWGraph, sync_service: SyncService, broker: ConsentBroker = None, identity=None, trainer: LoRATrainer = None, style_adapter: StyleAdapter = None, model_names: list[str] = None, on_switch_model=None, cfg=None, policy=None):
     
     # FIX #1: Custom CSS to resolve the double scrollbar issue.
     custom_css = """
@@ -156,6 +221,8 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
                         def _switch(name):
                             return on_switch_model(name)
                         model_dd.change(_switch, inputs=[model_dd], outputs=[model_status])
+                if cfg is not None:
+                    mount_web_access(demo, cfg, policy)
                 gr.Markdown("### Memory Inbox")
                 pending_facts = gr.CheckboxGroup(label="Approve Pending Facts", choices=[])
                 approve_btn = gr.Button("Approve Selected")

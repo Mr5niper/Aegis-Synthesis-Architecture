@@ -332,7 +332,9 @@ def main():
         trainer=lora_trainer,
         style_adapter=style_adapter,
         model_names=model_names,
-        on_switch_model=switch_model_cb
+        on_switch_model=switch_model_cb,
+        cfg=cfg,
+        policy=policy,
     )
 
 if __name__ == "__main__":
