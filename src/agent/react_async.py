@@ -32,7 +32,13 @@ def _extract_first_json(text: str) -> Optional[str]:
 # these markers ends generation at the end of the actual answer.
 _ANSWER_STOP = [
     "\nUser:", "\nUser ", "\nSystem:", "\nAssistant:",
-    "\nPlease answer as", "\nSources:", "\n\nSources:", "\nQuestion:",
+    "\nSources:", "\n\nSources:", "\nQuestion:",
+    # Runaway self-conversation tells seen from the small model on the
+    # fetch_url path: echoed instructions, stage directions in parentheses,
+    # and fake meta-notes. Stop as soon as any of these begin a line.
+    "\nPlease answer", "\nPlease respond", "\nAnswer the user",
+    "\n(Note", "\n(No additional", "\n(I will", "\n(Assistant",
+    "\nObservation:", "\nAction:", "\nThinking:", "\nThought:",
 ]
 
 class ReActAgent:

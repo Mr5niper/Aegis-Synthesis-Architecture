@@ -39,19 +39,84 @@ class AppConfig(BaseModel):
     embeddings: EmbeddingsConfig
     paths: PathsConfig
 
-def load_config(path: str = "config.yaml") -> AppConfig:
+def resolve_config_path(path: str = "config.yaml") -> str:
+    """Return the path load_config/save_config should use.
+
+    When running as a PyInstaller-built exe, the working directory is wherever
+    the user launched from, not where the exe lives. Prefer config.yaml next to
+    the executable (e.g. dist/config.yaml beside dist/Aegis.exe), NOT inside the
+    temporary _MEIPASS extraction dir, so the user can edit it and edits persist.
+    """
     import sys
-    # When running as a PyInstaller-built exe, the working directory is wherever
-    # the user launched from, not where the exe lives. Look for config.yaml next
-    # to the executable (e.g. dist\config.yaml beside dist\Aegis.exe), NOT inside
-    # the temporary _MEIPASS extraction dir, so the user can edit it.
     if getattr(sys, "frozen", False):
         exe_dir_cfg = Path(sys.executable).parent / "config.yaml"
         if exe_dir_cfg.is_file():
-            path = str(exe_dir_cfg)
+            return str(exe_dir_cfg)
+    return path
+
+def load_config(path: str = "config.yaml") -> AppConfig:
+    path = resolve_config_path(path)
     with open(path, "r") as f:
         data = yaml.safe_load(f)
     return AppConfig(**data)
+
+def save_config(cfg: AppConfig, path: str = "config.yaml") -> str:
+    """Write the config back to YAML, to the same file load_config reads.
+
+    Returns the path written. Used by the in-app settings (e.g. the Web Access
+    panel) so changes survive a restart. Reads the current file first and only
+    overwrites the known top-level sections, so any comments-free extra keys a
+    user added by hand are preserved as data (comments themselves are not kept
+    by the YAML round-trip; this is documented for users in the settings panel).
+    """
+    path = resolve_config_path(path)
+    data = cfg.model_dump()
+    # quiet_hours is a tuple in the model; YAML should store it as a list.
+    try:
+        qh = data.get("assistant", {}).get("quiet_hours")
+        if isinstance(qh, tuple):
+            data["assistant"]["quiet_hours"] = list(qh)
+    except Exception:
+        pass
+    with open(path, "w") as f:
+        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True, default_flow_style=False)
+    return path
+
+def update_web_access(cfg: AppConfig, policy, allow_all: bool, domains: List[str], path: str = "config.yaml") -> str:
+    """Apply web-access settings live and persist them.
+
+    allow_all=True is represented as an EMPTY allow_domains list, which both the
+    policy and the fetch layer already treat as "allow any domain". Otherwise the
+    provided domain list is used. The list is mutated IN PLACE on cfg so the
+    already-constructed tool registry (which reads cfg.assistant.allow_domains at
+    call time) sees the change immediately, and the policy copy is updated too.
+    Returns the saved file path.
+    """
+    cleaned = [] if allow_all else _clean_domains(domains)
+    # Mutate in place (do not rebind) so shared references stay valid.
+    cfg.assistant.allow_domains[:] = cleaned
+    if policy is not None:
+        policy.allow_domains = cleaned
+    return save_config(cfg, path)
+
+def _clean_domains(domains: List[str]) -> List[str]:
+    """Normalize a user-entered domain list: strip scheme/paths/whitespace,
+    drop blanks and duplicates, keep bare hostnames like "github.com"."""
+    out = []
+    for d in domains or []:
+        d = (d or "").strip()
+        if not d:
+            continue
+        # Strip a scheme if the user pasted a full URL.
+        if "://" in d:
+            d = d.split("://", 1)[1]
+        # Strip any path/query after the host.
+        d = d.split("/", 1)[0].split("?", 1)[0]
+        # Strip a leading "www." for consistency (endswith match still works).
+        d = d.strip().lower()
+        if d and d not in out:
+            out.append(d)
+    return out
 
 def ensure_dirs(cfg: AppConfig):
     for path_str in cfg.paths.model_dump().values():
