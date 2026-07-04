@@ -1,6 +1,6 @@
 # Aegis Synthesis Architecture - Technical Reference Manual
 
-**Version:** 1.1  
+**Version:** 1.2  
 **Date:** June 2026  
 
 ---
@@ -555,7 +555,7 @@ This document should be sufficient to build, operate, extend, and reason about t
 **Document Information:**
 
 **Title:** Aegis Synthesis Architecture - Technical Reference Manual  
-**Version:** 1.1  
+**Version:** 1.2  
 **Date:** June 2026  
 
 ---

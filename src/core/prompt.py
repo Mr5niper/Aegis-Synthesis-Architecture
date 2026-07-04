@@ -82,20 +82,23 @@ def react_step_prompt(system: str, tools_list: list[str], scratchpad: str, user:
 
 
 def final_answer_prompt(system: str, chat: str, rag: str, observations: str, user: str) -> str:
-    parts = [f"System:\n{system}"]
+    # The style instruction goes in the SYSTEM block, not just before the answer.
+    # Small models parrot whatever instruction sits right before the generation
+    # point, so putting "answer in plain English" at the end made it echo that
+    # sentence verbatim. Kept high up, it steers without being copied.
+    style = (
+        "You are answering a person in a chat. Reply with a single, direct answer "
+        "in plain, natural English prose. Do NOT output JSON, key/value pairs, code "
+        "blocks, curly braces, or field names. Do NOT write \"Observation\", "
+        "\"Action\", \"Note\", stage directions in parentheses, or any further "
+        "turns of dialogue. Write the answer and then stop."
+    )
+    parts = [f"System:\n{system}\n\n{style}"]
     if chat:
         parts.append("Recent conversation:\n" + chat)
     if rag:
         parts.append("Knowledge context:\n" + rag)
     if observations:
         parts.append("Tool observations (use these for your answer; cite URLs when present):\n" + observations)
-    # Small models, primed by the JSON of the routing step, tend to answer in
-    # JSON or key/value form. Explicitly require a natural-language reply so the
-    # user sees a sentence, not a {"name": ...} object.
-    parts.append(
-        "Answer the user directly in plain, natural English prose, as a friendly "
-        "assistant speaking to a person. Do NOT output JSON, key/value pairs, code "
-        "blocks, curly braces, or field names. Write normal sentences."
-    )
     parts.append("User:\n" + user + "\nAssistant:")
     return "\n\n".join(parts)

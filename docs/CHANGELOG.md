@@ -1,6 +1,19 @@
 # AEGIS SYNTHESIS ARCHITECTURE CHANGELOG
 
-## v1.1.0.0 - [current]
+## v1.2.0.0 - [current]
+
+### Web Access
+- **In-app Web Access settings panel (`src/ui/gui.py`, `src/core/config.py`, `src/main_gui.py`):** Which sites the assistant could fetch was controlled only by hand-editing `allow_domains` in `config.yaml`, and there was no way to allow all sites short of emptying that list manually. A `fetch_url` on a site that was not on the list (for example github.com) was blocked with a security-restriction message.
+  - Added a Web Access panel in the GUI with an "Allow all sites" toggle and an editable, one-domain-per-line allow list, plus a Save button and status line. Changes apply to the running app immediately and are written back to `config.yaml`.
+  - "Allow all sites" is stored as an empty `allow_domains` list, which the policy and fetch layers already treat as no restriction. Entered domains are normalized (scheme and path stripped, lowercased, de-duplicated). The allow list is mutated in place so the already-running tool registry sees the change without a restart, and the policy copy is updated too.
+  - `core/config.py` gains `resolve_config_path` (so load and save target the same file, including the exe-dir `config.yaml` in a frozen build), `save_config`, and `update_web_access`. `main_gui.py` passes the live `cfg` and `policy` objects into the GUI so the panel edits the same objects the tools use.
+
+### Agent
+- **Model no longer talks to itself after fetching a page (`src/agent/react_async.py`, `src/core/prompt.py`):** On the `fetch_url` path the small model would echo the final-answer instruction verbatim and then role-play a whole fake exchange (stage directions in parentheses, invented meta-notes, an unrelated "waiting on my order" monologue) instead of answering.
+  - The plain-English answer instruction was moved out of the tail of `final_answer_prompt` and up into the system block. Small models parrot whatever instruction sits immediately before the generation point, so at the end it was being copied into the reply; kept high in the prompt it steers without being echoed.
+  - The final-answer stop list was expanded to halt the runaway self-conversation as soon as it starts: echoed instructions (`Please answer`, `Please respond`, `Answer the user`), parenthetical stage directions (`(Note`, `(No additional`, `(I will`, `(Assistant`), and stray transcript markers (`Observation:`, `Action:`, `Thinking:`, `Thought:`).
+
+## v1.1.0.0
 
 ### Performance
 - **Proactive agents disabled by default (lag fix):** The Sentinel clipboard/window watcher polled every 3 seconds and fired a full LLM generation on every clipboard or active-window change. Because it shares the single CPU-bound model instance with the chat (serialized by a per-model semaphore), user messages queued behind background suggestions, producing the lag and apparent freezes during normal use.
