@@ -357,11 +357,14 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
                 yield history
         
         # Wire up chat flow
+        # show_progress="hidden": suppress Gradio's elapsed-seconds timer on the
+        # streaming response event. That timer is only a stopwatch of how long the
+        # event has run (it cannot predict time remaining), which was misleading.
         req = msg.submit(user_turn, [msg, chatbot, sid, cancel], [chatbot, msg, sid, cancel], queue=False).then(
-            bot_turn, [chatbot, sid, cancel], chatbot
+            bot_turn, [chatbot, sid, cancel], chatbot, show_progress="hidden"
         )
         req2 = send_btn.click(user_turn, [msg, chatbot, sid, cancel], [chatbot, msg, sid, cancel], queue=False).then(
-            bot_turn, [chatbot, sid, cancel], chatbot
+            bot_turn, [chatbot, sid, cancel], chatbot, show_progress="hidden"
         )
         stop_btn.click(lambda c: c.set(), inputs=cancel, outputs=None, queue=False, cancels=[req, req2])
         
