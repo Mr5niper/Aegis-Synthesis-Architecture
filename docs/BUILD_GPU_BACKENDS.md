@@ -47,11 +47,18 @@ Reboot after installing so VULKAN_SDK and PATH are live.
 ### Verified toolchain
 
 This is the exact combination the shipping Vulkan build was produced and
-confirmed working with, on Windows, Python 3.13.12:
+confirmed working with, on Windows, Python 3.13.12. The exact installer files
+used are listed so the same artifacts can be obtained again:
 
-- Vulkan SDK 1.4.350.0
-- CMake 4.3.4
-- Visual Studio 2022 Build Tools, MSVC v143 (19.44)
+- Vulkan SDK 1.4.350.0 (installer `vulkansdk-windows-X64-1.4.350.0.exe`).
+  Note: the installer file's own "File version" property reads 4.10.0.0, which
+  is the installer stub version, not the SDK version. The SDK version is
+  1.4.350.0, as in the filename.
+- CMake 4.3.4 (installer `cmake-4.3.4-windows-x86_64.msi`; the MSI is packaged
+  with WiX Toolset 4.0.4.0, which is unrelated to the CMake version).
+- Visual Studio 2022 Build Tools (installer `vs_BuildTools.exe`, file version
+  17.14.37411.7, product "Visual Studio 2022"), "Desktop development with C++"
+  workload, providing MSVC v143 (compiler 19.44).
 - Windows SDK 10.0.26100
 - Python 3.13.12
 

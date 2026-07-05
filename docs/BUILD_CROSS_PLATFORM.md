@@ -82,11 +82,60 @@ Notes specific to macOS:
 - Gatekeeper quarantine: a binary built locally is unsigned. Before running it
   the first time you may need to clear the quarantine attribute:
   `xattr -dr com.apple.quarantine dist/Aegis`
-- Apple Silicon (M-series): the CPU `llama-cpp-python` wheel works, but you may
-  prefer a Metal-accelerated build for speed. That is a different wheel/build
-  and is not configured here.
+- Apple Silicon (M-series): the CPU `llama-cpp-python` wheel works. For GPU
+  acceleration use the Metal build via `--gpu` (see "GPU acceleration" below).
 - Code signing and notarization (needed to distribute to other Macs without
   warnings) are out of scope for this script.
+
+## GPU acceleration (opt-in, untested)
+
+By default the Linux and macOS build installs a CPU-only `llama-cpp-python`, so
+the program runs entirely on the CPU. All of Aegis's other behavior is the same
+as on Windows: one model resident at a time, context sized automatically to the
+machine, the auto-saving Web Access panel, the theme, and so on. Those are pure
+Python and need no build changes; only GPU inference does.
+
+To build with GPU acceleration, add `--gpu` (or set `AEGIS_GPU=1`):
+
+```
+python3 build_executable.py --gpu
+# or
+make build-gpu
+```
+
+This compiles `llama-cpp-python` from source with a GPU backend instead of
+installing the CPU wheel:
+
+- Linux: the Vulkan backend (`-DGGML_VULKAN=on`), the same cross-vendor backend
+  the Windows build uses. It runs on AMD, NVIDIA, or Intel GPUs at runtime.
+- macOS: the Metal backend (`-DGGML_METAL=on`). macOS has no Vulkan; Metal is
+  the correct GPU path for Apple GPUs. Metal reports unified memory, which the
+  context sizing reads the same way it reads VRAM.
+
+Either way the same source patch as the Windows build is applied (a missing
+`#include <chrono>` in two vendor files) and the unused llava vision example is
+skipped. If the GPU compile fails for any reason, the script prints a warning
+and falls back to the CPU wheel, so you still get a working program.
+
+This GPU path is a best-effort mirror of the Windows build and has NOT been
+tested by the maintainer on Linux or macOS. Expect to install prerequisites and
+possibly adjust for your platform.
+
+Prerequisites for `--gpu`:
+
+- A C/C++ compiler and CMake on PATH.
+  - Debian/Ubuntu: `sudo apt install build-essential cmake`
+  - Fedora: `sudo dnf install gcc-c++ cmake`
+  - macOS: Xcode command-line tools (`xcode-select --install`); CMake via
+    `brew install cmake`.
+- Linux only, for the Vulkan backend: the Vulkan SDK or your distro's Vulkan
+  development packages and shader tools.
+  - Debian/Ubuntu: `sudo apt install libvulkan-dev glslang-tools spirv-tools`
+    (or install the LunarG Vulkan SDK for your distro).
+  - Fedora: `sudo dnf install vulkan-loader-devel glslang spirv-tools`
+  - The end user still needs nothing beyond their normal GPU driver; the SDK is
+    only for building.
+- macOS Metal needs no extra SDK beyond the Xcode command-line tools.
 
 ## When the llama-cpp-python wheel is missing
 
@@ -114,14 +163,17 @@ and architecture.
 
 `build_executable.py` flags:
 
-- (no flags): create/reuse `venv`, install dependencies, build.
+- (no flags): create/reuse `venv`, install dependencies (CPU), build.
 - `--no-venv`: use the current Python environment instead of creating `venv`.
 - `--deps-only`: install dependencies, do not build.
 - `--build-only`: build only, assuming dependencies are already installed.
+- `--gpu`: compile `llama-cpp-python` with a GPU backend (Vulkan on Linux, Metal
+  on macOS) instead of the CPU wheel. Untested; falls back to CPU on failure.
+  `AEGIS_GPU=1` does the same.
 
-`Makefile` targets: `install`, `build`, `build-only`, `run-gui`,
-`run-headless`, `run-nexus`, `clean`, `clean-venv`. Run `make help` for the
-list.
+`Makefile` targets: `install`, `install-gpu`, `build`, `build-gpu`,
+`build-only`, `run-gui`, `run-headless`, `run-nexus`, `clean`, `clean-venv`.
+Run `make help` for the list.
 
 ## What the build produces
 
