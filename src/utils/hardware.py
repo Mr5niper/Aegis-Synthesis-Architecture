@@ -90,6 +90,36 @@ def _run(cmd) -> str:
         return ""
 
 
+def _windows_gpu_vram_gb() -> float:
+    r"""Best-effort read of the primary GPU's dedicated VRAM on Windows, in GB.
+
+    Win32_VideoController.AdapterRAM is a 32-bit signed field that saturates at
+    ~4 GB and misreports larger cards, so we do NOT trust it for modern GPUs.
+    The reliable value is the 64-bit qwMemorySize the driver writes to the
+    registry under each display adapter's key
+    (HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-...}\000x ->
+    HardwareInformation.qwMemorySize). We take the largest across adapters.
+    Returns 0.0 on any failure (caller then falls back to RAM-based sizing).
+    """
+    ps = (
+        r"$vals = Get-ItemProperty "
+        r"'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\*' "
+        r"-ErrorAction SilentlyContinue | "
+        r"ForEach-Object { $_.'HardwareInformation.qwMemorySize' } | "
+        r"Where-Object { $_ -ne $null }; "
+        r"if ($vals) { ($vals | Measure-Object -Maximum).Maximum }"
+    )
+    out = _run(["powershell", "-NoProfile", "-Command", ps])
+    try:
+        # The value is bytes; take the largest integer token in the output.
+        nums = [int(t) for t in out.replace("\r", " ").split() if t.strip().isdigit()]
+        if nums:
+            return round(max(nums) / (1024 ** 3), 1)
+    except Exception:
+        pass
+    return 0.0
+
+
 def _detect_gpu() -> tuple[str, float]:
     """Return (vendor, vram_gb). Best-effort, never raises."""
     sysname = platform.system()
@@ -121,12 +151,14 @@ def _detect_gpu() -> tuple[str, float]:
                 "powershell", "-NoProfile", "-Command",
                 "(Get-CimInstance Win32_VideoController).Name"
             ]).lower()
+        # Read dedicated VRAM once (64-bit registry value); 0.0 if unavailable.
+        vram = _windows_gpu_vram_gb()
         if "nvidia" in name or "geforce" in name or "quadro" in name or "rtx" in name:
-            return "nvidia", 0.0
+            return "nvidia", vram
         if "amd" in name or "radeon" in name:
-            return "amd", 0.0
+            return "amd", vram
         if "intel" in name and ("arc" in name or "iris" in name or "graphics" in name):
-            return "intel", 0.0
+            return "intel", vram
 
     # Linux: lspci vendor scan.
     if sysname == "Linux":
@@ -189,15 +221,14 @@ def plan_model_params(hw: HardwareProfile, requested_ctx: int, n_gpu_layers_cfg:
     - n_gpu_layers: if config forces a value (>0 or -1) and a GPU backend is
       usable, respect it. If config is 0 (auto) and a usable GPU exists, offload
       all layers (-1). Otherwise 0 (CPU).
-    - n_ctx: auto-scaled to the machine. The config ctx_size is treated as a
-      BASELINE/floor: weak machines are clamped DOWN so they do not thrash or
-      OOM, and capable machines are scaled UP for a bigger context window.
-      Scaling is keyed off system RAM (reliably detected on every platform,
-      unlike VRAM which we cannot read for AMD/Intel). The result is never
-      allowed to exceed ctx_train_max (the context length the model was
-      actually trained for) when that is provided; going past it degrades
-      output quality. When ctx_train_max is 0/unknown we do not scale above
-      the requested baseline, to stay safe.
+    - n_ctx: auto-scaled to the machine. The config ctx_size is a BASELINE
+      floor (never reduced below it, only raised), and the result is capped by
+      ctx_train_max (the model's trained context length) when known. The
+      capability signal depends on the build: a GPU-offload build sizes by
+      VRAM (the KV cache lives in VRAM), a CPU build sizes by system RAM. If a
+      GPU is present but its VRAM cannot be read, a conservative fixed ceiling
+      is used instead of RAM (which would over-size and OOM the card). The
+      chosen ceiling, the reason, and any fallback are printed to the console.
     - n_threads: from CPU detection.
     """
     # GPU layers
@@ -208,48 +239,94 @@ def plan_model_params(hw: HardwareProfile, requested_ctx: int, n_gpu_layers_cfg:
     else:
         n_gpu_layers = -1  # auto: offload everything to the usable GPU
 
-    # Context sizing, scaled to the machine by system RAM. RAM is used as the
-    # capability signal because it is detected reliably on every OS, whereas
-    # VRAM is only readable for NVIDIA here (AMD/Intel report 0). Bigger RAM
-    # strongly correlates with a more capable box (and, on GPU builds, a
-    # bigger card), so it is a safe proxy for "how much context can this PC
-    # comfortably hold". The KV cache grows with context length; it lives in
-    # VRAM on a GPU offload build and in RAM on a CPU build, so on a weak
-    # machine we must clamp DOWN, and on a strong one we can open it UP.
+    # Context sizing. The correct capacity signal DEPENDS on where the KV cache
+    # lives, and that differs between the two build types:
     #
-    # ceiling is the largest context we will hand this tier. The final value
-    # is max(baseline, ceiling) so a user who hand-sets a large ctx_size in
-    # config is never REDUCED below their request on a capable machine, only
-    # raised - and then everything is capped by the model's trained max.
-    ram = hw.total_ram_gb
-    if ram <= 8:
-        ceiling = 4096
-    elif ram <= 16:
-        ceiling = 8192
-    elif ram <= 32:
-        ceiling = 16384
-    elif ram <= 64:
-        ceiling = 32768
+    #   - GPU offload build: the KV cache lives in VRAM. So the ceiling MUST be
+    #     governed by VRAM, NOT system RAM. Sizing off system RAM here is what
+    #     caused an out-of-device-memory crash on a 12 GB card in a 128 GB box:
+    #     RAM said "go huge", VRAM could not hold it.
+    #   - CPU-only build: the KV cache lives in system RAM, so RAM is the right
+    #     signal there.
+    #
+    # SAFETY PRINCIPLE (per design): whenever the correct signal is uncertain
+    # (GPU present but VRAM unreadable, or any probe returns 0), we FALL BACK to
+    # a conservative fixed ceiling rather than risk an OOM, and we PRINT which
+    # branch was taken and why, so a later crash log shows the decision.
+    #
+    # ceiling is the largest context this machine will be handed. Final n_ctx is
+    # max(configured baseline, ceiling) - a hand-set ctx_size is never reduced,
+    # only raised - then capped by the model's trained max below.
+    _reason = ""
+    if hw.has_usable_gpu:
+        vram = hw.gpu_vram_gb
+        if vram and vram > 0:
+            # VRAM-tiered ceiling. Tuned to leave room for the model weights
+            # (a 3B-7B Q4_K_M is ~2-4.5 GB) plus compute buffers alongside the
+            # KV cache on the same card. Deliberately conservative: better a
+            # smaller window than a failed load.
+            if vram <= 6:
+                ceiling = 4096
+            elif vram <= 8:
+                ceiling = 8192
+            elif vram <= 12:
+                ceiling = 16384
+            elif vram <= 16:
+                ceiling = 24576
+            elif vram <= 24:
+                ceiling = 32768
+            else:
+                ceiling = 65536
+            _reason = f"GPU sizing by VRAM: {vram} GB -> ceiling {ceiling}"
+        else:
+            # GPU is usable but we could not read its VRAM (e.g. AMD/Intel where
+            # the registry probe failed). Do NOT fall back to RAM-based sizing:
+            # that over-sizes and OOMs the card. Use a safe fixed ceiling.
+            ceiling = 8192
+            _reason = ("GPU present but VRAM unknown (probe returned 0); "
+                       f"using SAFE FALLBACK ceiling {ceiling}")
     else:
-        ceiling = 65536
-
-    # On a CPU-only build the KV cache sits in RAM and every token is computed
-    # on the CPU, so a huge window both eats memory and slows each turn. Keep
-    # the low tiers conservative by not letting CPU-only machines use the very
-    # top of the range (halve the ceiling above the 16 GB tier, floor 8192).
-    if not hw.has_usable_gpu and ceiling > 8192:
-        ceiling = max(8192, ceiling // 2)
+        # CPU-only build: KV cache is in system RAM, so RAM is the right signal.
+        ram = hw.total_ram_gb
+        if ram <= 8:
+            ceiling = 4096
+        elif ram <= 16:
+            ceiling = 8192
+        elif ram <= 32:
+            ceiling = 16384
+        elif ram <= 64:
+            ceiling = 32768
+        else:
+            ceiling = 65536
+        # Even with lots of RAM, CPU inference computes every token on the CPU,
+        # so a huge window slows each turn. Hold the top tiers back a step.
+        if ceiling > 8192:
+            ceiling = max(8192, ceiling // 2)
+        _reason = f"CPU sizing by RAM: {hw.total_ram_gb} GB -> ceiling {ceiling}"
 
     # Baseline from config is a floor: never go below what the user asked for.
     n_ctx = max(requested_ctx, ceiling)
+    _floor_note = ""
+    if requested_ctx > ceiling:
+        _floor_note = f"; config baseline {requested_ctx} raises it above ceiling"
 
     # Never exceed the model's trained context length when we know it; going
     # past it produces degraded output. When unknown (0), do not scale above
     # the requested baseline to stay safe.
+    _cap_note = ""
     if ctx_train_max and ctx_train_max > 0:
+        if n_ctx > ctx_train_max:
+            _cap_note = f"; capped to model trained max {ctx_train_max}"
         n_ctx = min(n_ctx, ctx_train_max)
     elif requested_ctx:
+        if n_ctx > requested_ctx:
+            _cap_note = (f"; model trained-max unknown, held at baseline "
+                         f"{requested_ctx}")
         n_ctx = min(n_ctx, requested_ctx)
+
+    # Always print the decision so crash logs show exactly how n_ctx was chosen
+    # and, importantly, whether a safe fallback was used.
+    print(f"[ctx] {_reason}{_floor_note}{_cap_note} => n_ctx={n_ctx}")
 
     return {
         "n_ctx": n_ctx,
