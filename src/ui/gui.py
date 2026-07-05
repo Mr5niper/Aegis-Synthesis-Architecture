@@ -89,7 +89,13 @@ def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
         the policy and fetch layer treat as "no restriction".
       - Restrict to a list: only the listed domains (and their subdomains) may
         be fetched.
-    Changes apply immediately to the running app and are saved to config.yaml.
+
+    Settings apply and save the moment they change; there is no Save button and
+    no status box. The domains textbox is the source of truth for the list and
+    is never cleared by toggling Allow-all: turning Allow-all on only disables
+    the box (its text is kept), and turning it off re-enables the same list.
+    (Internally, Allow-all is stored as an empty list in config.yaml, but the
+    box keeps showing your domains so they return intact when you switch back.)
     """
     current = list(cfg.assistant.allow_domains or [])
     start_allow_all = len(current) == 0
@@ -99,7 +105,7 @@ def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
             "Control which websites Aegis may open when it searches or fetches a "
             "page. Turn on **Allow all sites** for unrestricted access, or leave "
             "it off and list the allowed domains (one per line, e.g. `github.com`). "
-            "Subdomains are included automatically."
+            "Subdomains are included automatically. Changes save automatically."
         )
         allow_all_cb = gr.Checkbox(
             label="Allow all sites (no domain restriction)",
@@ -112,38 +118,42 @@ def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
             placeholder="github.com\nraw.githubusercontent.com\nwikipedia.org",
             interactive=not start_allow_all,
         )
-        with gr.Row():
-            save_btn = gr.Button("Save Web Access", variant="primary")
-        web_status = gr.Textbox(label="Status", interactive=False, lines=1)
         gr.Markdown(
-            "_Note: saving rewrites `config.yaml`. Your settings are preserved; "
-            "hand-written comments in the file are not._"
+            "_Changes are saved to `config.yaml` automatically. Your settings are "
+            "preserved; hand-written comments in the file are not._"
         )
 
-        # Grey out the list when Allow-all is on.
-        def _toggle_all(is_all):
-            return gr.update(interactive=not is_all)
-        allow_all_cb.change(_toggle_all, inputs=[allow_all_cb], outputs=[domains_box], queue=False)
-
-        def _save(is_all, text):
-            domains = [line for line in (text or "").splitlines()]
+        # Persisting helper. Always saves the CURRENT textbox contents as the
+        # list, regardless of the Allow-all state, so the list is never lost.
+        # When Allow-all is on, update_web_access stores an empty list in config
+        # (its representation of "allow any"), but we leave the textbox text
+        # untouched so the domains reappear the moment Allow-all is turned off.
+        def _persist(is_all, text):
             try:
-                saved_path = update_web_access(cfg, policy, bool(is_all), domains)
-            except Exception as e:
-                return gr.update(), f"Error saving: {e}"
-            # Reflect the normalized result back into the box.
-            normalized = list(cfg.assistant.allow_domains)
-            if is_all:
-                msg = "Saved. All sites are now allowed (no restriction)."
-            else:
-                if normalized:
-                    msg = "Saved. Allowing %d domain(s)." % len(normalized)
-                else:
-                    msg = ("Saved, but the list is empty, so ALL sites are allowed. "
-                           "Add domains or this is effectively allow-all.")
-            return gr.update(value="\n".join(normalized)), msg
+                update_web_access(cfg, policy, bool(is_all), (text or "").splitlines())
+            except Exception:
+                # Saving should not break the UI; a failed write leaves the
+                # in-memory setting applied and the file unchanged.
+                pass
 
-        save_btn.click(_save, inputs=[allow_all_cb, domains_box], outputs=[domains_box, web_status], queue=False)
+        # Toggling Allow-all: save immediately and enable/disable the list box
+        # WITHOUT changing its text (gr.update with no value leaves text as-is).
+        def _on_toggle(is_all, text):
+            _persist(is_all, text)
+            return gr.update(interactive=not is_all)
+        allow_all_cb.change(
+            _on_toggle, inputs=[allow_all_cb, domains_box], outputs=[domains_box],
+            queue=False,
+        )
+
+        # Editing the list: save when focus leaves the box (blur) and on submit,
+        # rather than on every keystroke, so config.yaml is not rewritten on each
+        # character. Only meaningful when Allow-all is off, but saving while it is
+        # on is harmless (the list is stored empty either way).
+        def _on_domains(is_all, text):
+            _persist(is_all, text)
+        domains_box.blur(_on_domains, inputs=[allow_all_cb, domains_box], outputs=None, queue=False)
+        domains_box.submit(_on_domains, inputs=[allow_all_cb, domains_box], outputs=None, queue=False)
 
 def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contacts, kairos, inbox: MemoryInbox, graph: LWWGraph, sync_service: SyncService, broker: ConsentBroker = None, identity=None, trainer: LoRATrainer = None, style_adapter: StyleAdapter = None, model_names: list[str] = None, on_switch_model=None, cfg=None, policy=None):
     
