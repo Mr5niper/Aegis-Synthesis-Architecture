@@ -218,8 +218,8 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
                     with gr.Accordion("Models", open=False):
                         model_dd = gr.Dropdown(choices=model_names, value=model_names[0], label="Active model")
                         model_status = gr.Textbox(label="Model status", interactive=False)
-                        def _switch(name):
-                            return on_switch_model(name)
+                        async def _switch(name):
+                            return await on_switch_model(name)
                         model_dd.change(_switch, inputs=[model_dd], outputs=[model_status])
                 if cfg is not None:
                     mount_web_access(demo, cfg, policy)
@@ -327,7 +327,7 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
             ], "", s, c 
             
         async def bot_turn(history, s, c):
-            agent = agent_factory()
+            agent = await agent_factory()
             
             current_response = ""
             
