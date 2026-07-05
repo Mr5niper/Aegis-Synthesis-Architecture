@@ -1,5 +1,38 @@
 # AEGIS SYNTHESIS ARCHITECTURE CHANGELOG
 
+## vX.X.X.X - [unreleased]
+
+### GPU Acceleration
+- **Single all-inclusive Vulkan GPU build (`BUILD_EXE.bat`, `docs/BUILD_GPU_BACKENDS.md`):** The build produced a CPU-only exe. It now compiles llama-cpp-python against the Vulkan backend so one executable uses whatever GPU is present (AMD, NVIDIA, or Intel) at runtime and falls back to CPU when there is none, with nothing for end users to install. The Vulkan runtime ships inside the graphics driver users already have; the Vulkan SDK, CMake, and MSVC C++ tools are needed only on the build machine. Verified on an AMD Radeon RX 7700 XT with full offload.
+  - Default backend is Vulkan (compiles from source with `-DGGML_VULKAN=on -DLLAVA_BUILD=OFF` and `--no-binary` so the flags take effect). `BUILD_EXE.bat cpu` keeps a prebuilt CPU-wheel fallback for machines without the toolchain. Backend selection is dispatched with goto labels to avoid fragile nested parenthesized blocks in cmd.
+  - `LLAVA_BUILD=OFF` skips the llava/clip vision example, which this text assistant does not use and which does not build cleanly on the current toolchain.
+  - Added a Vulkan prerequisite pre-flight that checks `VULKAN_SDK` and cmake, and warns (does not fail) when cl.exe is not directly on PATH, since CMake locates MSVC itself.
+  - llama-cpp-python stays pinned to the same version on both the Vulkan and CPU paths. Only the compile differs for the GPU build, so nothing else in the app changes.
+- **Source patch for newer Windows SDK and MSVC (`BUILD_EXE.bat`):** The pinned llama-cpp-python predates a change in the Windows 11 SDK (10.0.26100) and MSVC 17.13+. Two of its C++ files (vendor `common.cpp` and `log.cpp`) use `std::chrono` without including `<chrono>`; older SDKs pulled it in transitively, the current one does not, so the compile failed with "'system_clock' is not a member of 'std::chrono'" (llama.cpp issue 11834).
+  - Because pip re-downloads fresh source each build, the Vulkan path does the install in explicit steps so the fix is reproducible: download the pinned source, extract it, add `#include <chrono>` to just those two C++ files (idempotent), then install that patched local directory. A global forced include was rejected because the codebase compiles C and C++ in the same targets, so a C++-only header forced onto a `.c` file trips STL1003.
+  - The tar extraction skips the vendor `spm-headers` folder. Those entries are symlinks used only for Swift Package Manager builds; Windows tar cannot create them and aborts the whole extract with "Invalid argument". The real headers they point to are separate normal files in the archive, so skipping the symlink folder loses nothing on Windows.
+- **Verified build toolchain recorded (`docs/BUILD_GPU_BACKENDS.md`):** Documented the exact known-good versions the shipping Vulkan build was produced with: Vulkan SDK 1.4.350.0, CMake 4.3.4, Visual Studio 2022 Build Tools (MSVC v143 / 19.44), Windows SDK 10.0.26100, Python 3.13.12. Also documented the source patch, the context-sizing behavior, and the one-model-resident behavior.
+
+### Hardware Adaptation
+- **Model settings adapt to the machine (`src/utils/hardware.py`, `src/main_gui.py`):** Threads, GPU offload, and context length were effectively fixed. A hardware detection step now sets them per machine. CPU thread count and total RAM are detected on every platform; GPU vendor is detected on Windows, Linux, and macOS. GPU offload (`n_gpu_layers`) is enabled automatically when a usable GPU backend is present, and left at CPU otherwise. A `[hardware]` line is printed at startup.
+- **Context window scaled to the machine (`src/utils/hardware.py`, `src/main_gui.py`):** Context length was a fixed config value. It is now chosen at startup from the machine, with the config `ctx_size` treated as a floor and the result capped by each model's trained maximum (Llama-3.2 128K, Mistral-7B 32K) so it is never set higher than the model supports.
+  - The capacity signal matches where the KV cache lives. On a GPU build the cache is in VRAM, so the ceiling is set from VRAM. On a CPU build it is in system RAM, so the ceiling is set from RAM.
+  - Real VRAM is read on Windows from the 64-bit `HardwareInformation.qwMemorySize` registry value for the display adapter. `Win32_VideoController.AdapterRAM` is 32-bit and saturates around 4 GB, so it is not used.
+  - If a GPU is present but its VRAM cannot be read, the build uses a conservative fixed ceiling instead of guessing from system RAM, which would over-size and fail to allocate on the card. Every path prints a `[ctx]` line showing the chosen ceiling, the reason, and whether a fallback was used, so a later log shows exactly how the context size was decided.
+  - Fixes an out-of-device-memory crash on a 12 GB card in a 128 GB machine, where sizing context from system RAM asked for far more VRAM than the card had.
+
+### Model Management
+- **One model resident at a time with lazy load and unload (`src/core/model_manager.py`, `src/core/llm_async.py`, `src/main_gui.py`, `src/main_headless.py`, `src/proactive/sentinel.py`, `src/proactive/curator.py`, `src/ui/gui.py`):** Every registered model was loaded into memory at startup and kept resident, so on a GPU all models shared the card's VRAM and each was forced into a small context to avoid running out of device memory (a 3B and a 7B loaded together overran a 12 GB card).
+  - `ModelManager` now holds model builders, not prebuilt instances, and loads only the active model. It is built on first use and unloaded when the user switches models, so the active model gets the whole card and can run a larger context. The cost is a few seconds to load on a deliberate switch.
+  - `AsyncLocalLLM` gained `unload()`, which acquires the inference semaphore before freeing the model so it cannot unload mid-generation (llama.cpp is not reentrant), and `is_loaded()`.
+  - A single async swap lock in `ModelManager` serializes "use the active model" against "switch the model", so a swap cannot free a model a caller is about to use and two swaps cannot interleave. `get_active()` and `switch_model()` are async.
+  - The background agents (Sentinel, Curator) now hold the manager and fetch the active model at call time instead of caching an instance, so they never call a model that has been unloaded by a switch. The UI awaits the now-async agent factory and switch callback. The headless entry point uses the same builder API.
+  - Conversation history already carries across a switch (it is stored by session, not by model), so the new model continues the conversation; it reprocesses the recent history on its first turn.
+
+### Agent
+- **Chat no longer shows the model's internal reasoning (`src/agent/react_async.py`):** On any tool-using turn the agent streamed a "Thinking:/Action:" block into the same output as the reply, so the model's rationale and the raw tool call were glued onto the front of the user-facing answer (most visible on the large model, which picks tools more often).
+  - Removed the yield that emitted that block. The tool still runs and the rationale and observations still feed the model through the scratchpad; only the user-facing leak is gone, so the chat now contains just the final answer.
+
 ## v1.2.0.0 - [current]
 
 ### Web Access

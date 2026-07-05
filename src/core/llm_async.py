@@ -22,6 +22,28 @@ class AsyncLocalLLM:
         self._sem = asyncio.Semaphore(1)
         self.n_ctx = n_ctx  # Expose context window size
 
+    async def unload(self):
+        """Free the underlying llama.cpp model and its GPU/CPU memory.
+
+        Used by ModelManager when swapping models so only the active model is
+        resident (the active model then gets the whole card, allowing a larger
+        context). We acquire the same semaphore that guards inference FIRST, so
+        unload cannot run while a generation is mid-flight (llama.cpp is not
+        reentrant; freeing under an active call would crash). Once acquired, we
+        drop the reference and force a collection; llama_cpp frees the native
+        model (and its VRAM) when the Llama object is destroyed. Idempotent:
+        a second call is a no-op.
+        """
+        async with self._sem:
+            if getattr(self, "_llm", None) is None:
+                return
+            self._llm = None
+            import gc
+            gc.collect()
+
+    def is_loaded(self) -> bool:
+        return getattr(self, "_llm", None) is not None
+
     def _generate_blocking(self, prompt: str, max_tokens: int, temperature: float = 0.6, top_p: float = 0.9, top_k: int = 40, repeat_penalty: float = 1.1, stop: Optional[List[str]] = None) -> str:
         stop = stop or ["\nUser:", "\nSystem:"]
         out = self._llm(
