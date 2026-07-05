@@ -215,7 +215,7 @@ def detect_hardware() -> HardwareProfile:
 
 
 def plan_model_params(hw: HardwareProfile, requested_ctx: int, n_gpu_layers_cfg: int,
-                      ctx_train_max: int = 0) -> dict:
+                      ctx_train_max: int = 0, concurrent_models: int = 1) -> dict:
     """Turn a hardware profile into concrete llama.cpp params.
 
     - n_gpu_layers: if config forces a value (>0 or -1) and a GPU backend is
@@ -229,6 +229,11 @@ def plan_model_params(hw: HardwareProfile, requested_ctx: int, n_gpu_layers_cfg:
       GPU is present but its VRAM cannot be read, a conservative fixed ceiling
       is used instead of RAM (which would over-size and OOM the card). The
       chosen ceiling, the reason, and any fallback are printed to the console.
+    - concurrent_models: how many models are held resident at the same time.
+      On a GPU build ALL registered models live in VRAM simultaneously, so the
+      per-model VRAM budget is the card's VRAM divided by this count. Sizing
+      each model as if it owned the whole card is what OOM'd a 12 GB card once
+      a 3B and a 7B were both loaded. Defaults to 1.
     - n_threads: from CPU detection.
     """
     # GPU layers
@@ -259,12 +264,19 @@ def plan_model_params(hw: HardwareProfile, requested_ctx: int, n_gpu_layers_cfg:
     # only raised - then capped by the model's trained max below.
     _reason = ""
     if hw.has_usable_gpu:
-        vram = hw.gpu_vram_gb
+        # All resident models share the card, so each model's real budget is
+        # the total VRAM divided by how many are loaded at once. Sizing against
+        # the full card per-model is what OOM'd when a 3B and a 7B coexisted.
+        n_models = max(1, concurrent_models)
+        vram_total = hw.gpu_vram_gb
+        vram = (vram_total / n_models) if vram_total else 0.0
         if vram and vram > 0:
-            # VRAM-tiered ceiling. Tuned to leave room for the model weights
-            # (a 3B-7B Q4_K_M is ~2-4.5 GB) plus compute buffers alongside the
-            # KV cache on the same card. Deliberately conservative: better a
-            # smaller window than a failed load.
+            # VRAM-tiered ceiling, applied to the PER-MODEL budget. Tuned to
+            # leave room for the model weights (a 3B-7B Q4_K_M is ~2-4.5 GB)
+            # plus compute buffers alongside the KV cache on the same card.
+            # Deliberately conservative: better a smaller window than a failed
+            # load. Note the tiers are read against the per-model share, so a
+            # 12 GB card with 2 models sizes each against ~6 GB.
             if vram <= 6:
                 ceiling = 4096
             elif vram <= 8:
@@ -277,7 +289,8 @@ def plan_model_params(hw: HardwareProfile, requested_ctx: int, n_gpu_layers_cfg:
                 ceiling = 32768
             else:
                 ceiling = 65536
-            _reason = f"GPU sizing by VRAM: {vram} GB -> ceiling {ceiling}"
+            _reason = (f"GPU sizing by VRAM: {vram_total} GB / {n_models} model(s) "
+                       f"= {round(vram, 1)} GB each -> ceiling {ceiling}")
         else:
             # GPU is usable but we could not read its VRAM (e.g. AMD/Intel where
             # the registry probe failed). Do NOT fall back to RAM-based sizing:

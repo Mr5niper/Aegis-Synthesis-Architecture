@@ -218,6 +218,13 @@ def main():
                 return val
         return 0
 
+    # All registered models are loaded into VRAM at once (below) and kept
+    # resident, so they share the GPU's memory simultaneously. Pass the count
+    # so context sizing budgets VRAM per-model (card VRAM / N), instead of
+    # sizing each as if it owned the whole card - which OOM'd a 12 GB card
+    # once a 3B and a 7B were both loaded.
+    resident_model_count = max(1, len(cfg.models))
+
     # 1. Load Models and Download
     for model_cfg_data in cfg.models:
         model_cfg = ModelConfig(**model_cfg_data)
@@ -230,7 +237,8 @@ def main():
         # a non-zero n_gpu_layers in config is treated as an explicit override;
         # 0 means 'auto' (offload all layers if a usable GPU backend exists).
         params = plan_model_params(hw, model_cfg.ctx_size, model_cfg.n_gpu_layers,
-                                    ctx_train_max=_ctx_train_max_for(model_cfg))
+                                    ctx_train_max=_ctx_train_max_for(model_cfg),
+                                    concurrent_models=resident_model_count)
         print(f"[model:{model_cfg.name}] n_ctx={params['n_ctx']} "
               f"n_threads={params['n_threads']} n_gpu_layers={params['n_gpu_layers']}")
         llm_instance = AsyncLocalLLM(
