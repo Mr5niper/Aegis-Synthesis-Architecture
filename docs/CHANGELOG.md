@@ -38,6 +38,11 @@
 - **Replaced the purple theme with a blue dark/light theme (`src/ui/gui.py`):** The UI used Gradio's built-in Soft theme, whose purple accents were unwanted, and an earlier CSS-only override only reached some surfaces and left the UI half-styled.
   - The theme is now configured through Gradio's theme object with `.set()`, which applies consistently across every component, rather than through CSS variable overrides. Colors were taken from the target design: page `#0e1014`, panels `#141c2b`, right panels and accordions `#1a2334`, borders `#1e2b45`, primary button `#274270` in dark (brighter on hover), input `#0e1014`, text `#e8eefc`. Light mode is a clean inversion using a `#2563eb` blue accent.
   - The light, dark, and system toggle is preserved, and all three modes use blue with no purple. Focus rings, sliders, and toggles are forced to blue as a safety net. All theme parameters were verified against the pinned Gradio 5.50.0 so the app does not crash at launch.
+- **Web Access panel saves automatically (`src/ui/gui.py`):** The panel required clicking a separate Save button, toggling "Allow all sites" cleared the domain list, and a status box echoed the result.
+  - Settings now persist the moment they change: the Allow-all checkbox saves on toggle, and the domains list saves when focus leaves the box or on submit (not on every keystroke, to avoid rewriting `config.yaml` on each character). The Save button is removed.
+  - Toggling Allow-all now only enables or disables the domains box and no longer changes its text, so the list is preserved and reappears intact when Allow-all is turned back off. Allow-all is still stored as an empty list in config (the existing "allow any" representation); the textbox keeps showing the domains independently.
+  - Removed the status box, and removed a leftover note about `config.yaml` being rewritten on save, which was redundant once saving became automatic.
+- **Updated the application icon (`aegis.ico`):** Replaced the executable icon with a new one. Picked up by PyInstaller from the path in `assistant_gui.spec` on the next build.
 
 ## v1.2.0.0 - [current]
 
