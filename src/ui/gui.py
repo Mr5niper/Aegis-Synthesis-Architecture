@@ -118,10 +118,6 @@ def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
             placeholder="github.com\nraw.githubusercontent.com\nwikipedia.org",
             interactive=not start_allow_all,
         )
-        gr.Markdown(
-            "_Changes are saved to `config.yaml` automatically. Your settings are "
-            "preserved; hand-written comments in the file are not._"
-        )
 
         # Persisting helper. Always saves the CURRENT textbox contents as the
         # list, regardless of the Allow-all state, so the list is never lost.
