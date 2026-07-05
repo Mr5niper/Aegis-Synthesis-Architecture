@@ -216,11 +216,17 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
                 use_sug_btn = gr.Button("Use Last Suggestion")
                 if model_names and on_switch_model:
                     with gr.Accordion("Models", open=False):
+                        # Just the selector; it always shows the working model.
+                        # The status textbox was removed as redundant: the
+                        # dropdown value is the source of truth for which model
+                        # is active. _switch performs the swap and returns the
+                        # name straight back into the dropdown so the selection
+                        # reflects the model in use.
                         model_dd = gr.Dropdown(choices=model_names, value=model_names[0], label="Active model")
-                        model_status = gr.Textbox(label="Model status", interactive=False)
                         async def _switch(name):
-                            return await on_switch_model(name)
-                        model_dd.change(_switch, inputs=[model_dd], outputs=[model_status])
+                            await on_switch_model(name)
+                            return gr.update(value=name)
+                        model_dd.change(_switch, inputs=[model_dd], outputs=[model_dd])
                 if cfg is not None:
                     mount_web_access(demo, cfg, policy)
                 gr.Markdown("### Memory Inbox")
