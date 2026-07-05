@@ -153,8 +153,14 @@ class ReActAgent:
                 break
             seen_actions.add(sig)
 
-            thought = call.rationale or "Planning next step."
-            yield f"\n---\n*Thinking:* {thought}\n*Action:* `{call.tool}` {call.args}\n---\n"
+            # The model's step reasoning (rationale) and the raw tool call are
+            # internal scratch-work, NOT part of the user-facing answer. They
+            # used to be streamed into the chat here, which glued a
+            # "Thinking:/Action:" block onto the front of the reply (visible on
+            # any tool-using turn). We deliberately do NOT yield them: the chat
+            # bubble should contain only the final answer. The tool still runs
+            # below, and the rationale/observations still feed the model via the
+            # scratchpad - the user just doesn't see the plumbing.
 
             obs = await self.tools.call(call.tool, call.args)
             observations.append(f"{call.tool} -> {obs[:800]}")
