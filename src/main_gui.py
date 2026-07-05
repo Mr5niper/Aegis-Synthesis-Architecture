@@ -38,6 +38,7 @@ from .ui.gui import launch_gui
 from .ui.consent import ConsentBroker
 
 from .utils.download import download_file
+from .utils.hardware import detect_hardware, plan_model_params, describe as describe_hw
 
 MODEL_THREADS = max(2, os.cpu_count() or 2)
 NEXUS_URL = os.getenv("AEGIS_NEXUS_URL", "ws://127.0.0.1:7861")
@@ -188,7 +189,15 @@ def main():
             sys.exit(1)
     
     ensure_dirs(cfg)
-    
+
+    # Detect hardware once so every model is built with settings that fit this
+    # machine (threads, context, and GPU offload) instead of the old hardcoded
+    # CPU-only values. Fully best-effort: on any failure it returns safe CPU
+    # defaults. Note: GPU offload only takes effect if the installed
+    # llama-cpp-python was built with a GPU backend (see utils/hardware.py).
+    hw = detect_hardware()
+    print(f"[hardware] {describe_hw(hw)}")
+
     model_manager = ModelManager()
     
     # 1. Load Models and Download
@@ -199,11 +208,17 @@ def main():
             print(f"Model '{model_cfg.name}' not found. Downloading...")
             download_file(model_cfg.url, mp, model_cfg.sha256 or "")
             
+        # Plan params from detected hardware. Config still has the final say:
+        # a non-zero n_gpu_layers in config is treated as an explicit override;
+        # 0 means 'auto' (offload all layers if a usable GPU backend exists).
+        params = plan_model_params(hw, model_cfg.ctx_size, model_cfg.n_gpu_layers)
+        print(f"[model:{model_cfg.name}] n_ctx={params['n_ctx']} "
+              f"n_threads={params['n_threads']} n_gpu_layers={params['n_gpu_layers']}")
         llm_instance = AsyncLocalLLM(
-            model_cfg.path, 
-            n_ctx=model_cfg.ctx_size, 
-            n_threads=MODEL_THREADS, 
-            n_gpu_layers=model_cfg.n_gpu_layers
+            model_cfg.path,
+            n_ctx=params['n_ctx'],
+            n_threads=params['n_threads'],
+            n_gpu_layers=params['n_gpu_layers'],
         )
         model_manager.register_model(model_cfg.name, llm_instance)
 
