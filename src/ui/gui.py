@@ -151,73 +151,76 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
     # no purple defaults) with a blue primary hue, then pin exact colors for
     # dark and light via CSS variables so both modes match the intended look
     # (deep navy dark; a clean light inversion). The light/dark toggle is kept.
+    # Theme built with gr.themes.Base and configured through .set(), which is
+    # how Gradio applies colors across every component consistently (setting raw
+    # CSS variables alone only reaches some surfaces). The dark values are
+    # sampled directly from the target design: near-black navy page, slightly
+    # lighter navy panels, a muted steel-blue primary button, and subtle blue
+    # borders. Light values are a clean inversion using the same blue accent.
+    # No purple anywhere; the light/dark/system toggle is preserved.
     aegis_theme = gr.themes.Base(
         primary_hue=gr.themes.colors.blue,
         secondary_hue=gr.themes.colors.blue,
         neutral_hue=gr.themes.colors.slate,
         font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
+    ).set(
+        # Page and block surfaces. *_dark are the values used in dark mode.
+        body_background_fill="#f4f7fb",
+        body_background_fill_dark="#0e1014",
+        background_fill_primary="#ffffff",
+        background_fill_primary_dark="#141c2b",
+        background_fill_secondary="#eef3fa",
+        background_fill_secondary_dark="#1a2334",
+        block_background_fill="#ffffff",
+        block_background_fill_dark="#141c2b",
+        block_border_color="#d7e0ee",
+        block_border_color_dark="#1e2b45",
+        border_color_primary="#d7e0ee",
+        border_color_primary_dark="#1e2b45",
+        # Panels/accordions.
+        panel_background_fill="#ffffff",
+        panel_background_fill_dark="#1a2334",
+        # Inputs.
+        input_background_fill="#ffffff",
+        input_background_fill_dark="#0e1014",
+        input_border_color="#d7e0ee",
+        input_border_color_dark="#1e2b45",
+        # Text.
+        body_text_color="#0f1729",
+        body_text_color_dark="#e8eefc",
+        body_text_color_subdued="#52607a",
+        body_text_color_subdued_dark="#8a97ad",
+        # Links / accent.
+        link_text_color="#1d4ed8",
+        link_text_color_dark="#60a5fa",
+        # Primary button: muted steel-blue in dark (matches the design),
+        # standard blue in light; both brighten on hover.
+        button_primary_background_fill="#2563eb",
+        button_primary_background_fill_dark="#274270",
+        button_primary_background_fill_hover="#1d4ed8",
+        button_primary_background_fill_hover_dark="#2f5490",
+        button_primary_text_color="#ffffff",
+        button_primary_text_color_dark="#ffffff",
+        # Secondary button.
+        button_secondary_background_fill="#eef3fa",
+        button_secondary_background_fill_dark="#182130",
+        button_secondary_background_fill_hover="#e2ebf7",
+        button_secondary_background_fill_hover_dark="#20293a",
+        button_secondary_text_color="#0f1729",
+        button_secondary_text_color_dark="#e8eefc",
     )
 
+    # CSS is now only the scroll fix plus a safety net that forces focus rings,
+    # sliders, and toggles to blue in case any component ignores the theme.
     custom_css = """
-    /* ---- Chatbot scroll boundaries (keep the double-scrollbar fix) ---- */
     .chatbot-container {
         max-height: 600px !important;
         overflow-y: auto !important;
     }
     .gradio-column { overflow: visible !important; }
-
-    /* ---- DARK MODE palette (deep navy + blue accent, no purple) ---- */
-    .dark {
-        --body-background-fill: #0b1220;
-        --background-fill-primary: #0f1729;
-        --background-fill-secondary: #16223b;
-        --block-background-fill: #0f1729;
-        --block-border-color: #1e2b45;
-        --border-color-primary: #1e2b45;
-        --border-color-accent: #2563eb;
-        --color-accent: #3b82f6;
-        --color-accent-soft: #16223b;
-        --link-text-color: #60a5fa;
-        --primary-500: #2563eb;
-        --primary-600: #1d4ed8;
-        --button-primary-background-fill: #2563eb;
-        --button-primary-background-fill-hover: #1d4ed8;
-        --button-primary-text-color: #ffffff;
-        --input-background-fill: #0b1220;
-        --body-text-color: #e5eefc;
-        --body-text-color-subdued: #94a3b8;
-    }
-
-    /* ---- LIGHT MODE palette (light inversion of the same blue look) ---- */
-    body:not(.dark), .light {
-        --body-background-fill: #f4f7fb;
-        --background-fill-primary: #ffffff;
-        --background-fill-secondary: #eef3fa;
-        --block-background-fill: #ffffff;
-        --block-border-color: #d7e0ee;
-        --border-color-primary: #d7e0ee;
-        --border-color-accent: #2563eb;
-        --color-accent: #2563eb;
-        --color-accent-soft: #e8f0fe;
-        --link-text-color: #1d4ed8;
-        --primary-500: #2563eb;
-        --primary-600: #1d4ed8;
-        --button-primary-background-fill: #2563eb;
-        --button-primary-background-fill-hover: #1d4ed8;
-        --button-primary-text-color: #ffffff;
-        --input-background-fill: #ffffff;
-        --body-text-color: #0f1729;
-        --body-text-color-subdued: #52607a;
-    }
-
-    /* ---- Kill any remaining purple from focus rings / sliders / toggles ---- */
     *:focus-visible { outline-color: #2563eb !important; }
     input[type=range] { accent-color: #2563eb !important; }
     input[type=checkbox], input[type=radio] { accent-color: #2563eb !important; }
-    .dark input:focus, .dark textarea:focus, .dark select:focus {
-        border-color: #2563eb !important;
-        box-shadow: 0 0 0 1px #2563eb !important;
-    }
     """
     
     with gr.Blocks(theme=aegis_theme, title="Aegis Synthesis", css=custom_css) as demo:
