@@ -3,7 +3,7 @@ import asyncio
 from typing import AsyncGenerator, Optional
 from pydantic import ValidationError
 from ..core.llm_async import AsyncLocalLLM
-from ..core.prompt import react_step_prompt, final_answer_prompt
+from ..core.prompt import react_step_prompt, final_answer_prompt, build_answer_messages
 from ..core.schemas import ToolCall
 from ..tools.registry_async import AsyncToolRegistry
 from ..memory.vector_store import LiteVectorStore
@@ -133,8 +133,11 @@ class ReActAgent:
 
             if not call or call.tool == "none":
                 full_answer = ""
-                final_prompt = final_answer_prompt(full_system_prompt, scratch, rag, "\n".join(observations), user)
-                async for tok in self.llm.stream_async(final_prompt, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
+                sys_with_ctx = full_system_prompt
+                if scratch:
+                    sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
+                messages = build_answer_messages(sys_with_ctx, [], rag, "\n".join(observations), user)
+                async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
                     full_answer += tok
                     yield tok
                 self.mem.add_message(session_id, user, full_answer, context="\n".join(observations))
@@ -160,8 +163,11 @@ class ReActAgent:
         # Reached here by exhausting max_steps or by the loop guard above.
         # Stream the final answer using whatever observations were gathered.
         full_answer = ""
-        final_prompt = final_answer_prompt(full_system_prompt, scratch, rag, "\n".join(observations), user)
-        async for tok in self.llm.stream_async(final_prompt, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
+        sys_with_ctx = full_system_prompt
+        if scratch:
+            sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
+        messages = build_answer_messages(sys_with_ctx, [], rag, "\n".join(observations), user)
+        async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
             full_answer += tok
             yield tok
         self.mem.add_message(session_id, user, full_answer, context="\n".join(observations))
@@ -175,9 +181,15 @@ class ReActAgent:
         full_system_prompt = f"{self.system_prompt} {profile_prompt} {style_prompt}".strip()
         # Include only recent conversation for continuity; no RAG/observations.
         scratch = self.mem.get_recent_context(session_id)
-        final_prompt = final_answer_prompt(full_system_prompt, scratch, "", "", user)
+        # Fold prior-conversation context into the system message; the current
+        # user message is a proper chat turn. Uses the model native chat
+        # template so it stops at its own end-of-turn token.
+        sys_with_ctx = full_system_prompt
+        if scratch:
+            sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
+        messages = build_answer_messages(sys_with_ctx, [], "", "", user)
         full_answer = ""
-        async for tok in self.llm.stream_async(final_prompt, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
+        async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
             full_answer += tok
             yield tok
         self.mem.add_message(session_id, user, full_answer, context="")

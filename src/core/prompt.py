@@ -102,3 +102,34 @@ def final_answer_prompt(system: str, chat: str, rag: str, observations: str, use
         parts.append("Tool observations (use these for your answer; cite URLs when present):\n" + observations)
     parts.append("User:\n" + user + "\nAssistant:")
     return "\n\n".join(parts)
+
+
+def build_answer_messages(system: str, history: list, rag: str, observations: str, user: str) -> list:
+    """Build a messages list for the model's native chat template
+    (create_chat_completion). This replaces the flat User:/Assistant: string
+    format the models were never trained on. history is a list of prior turns
+    as {'role': 'user'|'assistant', 'content': str}; rag/observations are folded
+    into the system message as context so they do not pollute the turn roles.
+    """
+    style = (
+        "You are answering a person in a chat. Reply with a single, direct answer "
+        "in plain, natural English prose. Do NOT output JSON, key/value pairs, code "
+        "blocks, curly braces, or field names. Do NOT write \"Observation\", "
+        "\"Action\", \"Note\", stage directions in parentheses, or any further "
+        "turns of dialogue. Write the answer and then stop."
+    )
+    sys_content = f"{system}\n\n{style}"
+    if rag:
+        sys_content += "\n\nKnowledge context:\n" + rag
+    if observations:
+        sys_content += ("\n\nTool observations (use these for your answer; cite "
+                        "URLs when present):\n" + observations)
+    messages = [{"role": "system", "content": sys_content}]
+    # Prior conversation turns, if any, so the template frames real multi-turn.
+    for turn in (history or []):
+        role = turn.get("role")
+        content = turn.get("content", "")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": user})
+    return messages
