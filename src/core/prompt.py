@@ -36,6 +36,18 @@ User: What's the latest stable version of Python?
 User: Summarize what's on this page https://example.com/post
 { "tool": "fetch_url", "args": { "url": "https://example.com/post" }, "rationale": "Need the page contents." }
 
+User: you have web access can you check espn.com
+{ "tool": "fetch_url", "args": { "url": "https://espn.com" }, "rationale": "User asked me to read a specific site; add https:// to the bare domain." }
+
+User: can you look at what's on wikipedia.org about otters
+{ "tool": "search_web", "args": { "query": "otters site:wikipedia.org", "k": 5 }, "rationale": "Named site plus a topic; search it live." }
+
+User: check the news on cnn.com
+{ "tool": "fetch_url", "args": { "url": "https://cnn.com" }, "rationale": "User named a site to read; fetch it." }
+
+User: who did the Portland Trail Blazers just trade for?
+{ "tool": "search_web", "args": { "query": "Portland Trail Blazers latest trade", "k": 5 }, "rationale": "Recent event, needs live info." }
+
 User: What time is it?
 { "tool": "now", "args": {}, "rationale": "Needs the current clock." }
 
@@ -72,8 +84,13 @@ def react_step_prompt(system: str, tools_list: list[str], scratchpad: str, user:
         f"Only use a tool when the question genuinely requires one: search_web for "
         f"current events, recent facts, prices, versions, or people you are not "
         f"certain about; calc for arithmetic; now for the current time; fetch_url "
-        f"for a specific page. If in doubt for a conversational message, choose "
-        f"\"none\".\n\n"
+        f"for a specific page. When the user names a website or asks you to check, "
+        f"open, read, or look at a site (even a bare domain like \"espn.com\"), you "
+        f"DO have web access through these tools: use fetch_url for that page (add "
+        f"\"https://\" to a bare domain), or search_web if they name a site plus a "
+        f"topic. Never reply that you cannot access the internet or a website; the "
+        f"tools above are your web access. If in doubt for a conversational message, "
+        f"choose \"none\".\n\n"
         f"{ROUTER_EXAMPLES}\n\n"
         f"Conversation and observations so far:\n{scratchpad}\n\n"
         f"User: {user}\n"
