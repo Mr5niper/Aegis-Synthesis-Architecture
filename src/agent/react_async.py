@@ -41,6 +41,43 @@ _ANSWER_STOP = [
     "\nObservation:", "\nAction:", "\nThinking:", "\nThought:",
 ]
 
+# Signals that a message needs the full ReAct pipeline (tools/RAG). If NONE of
+# these are present and the message is short, we take the fast path: a single
+# streamed generation with no routing call, no RAG retrieval, and no fact
+# distillation. This is what makes a plain "hello" fast instead of running
+# three sequential model calls.
+import re as _re
+
+_TOOL_HINTS = (
+    "http://", "https://", "www.", ".com", ".org", ".net", ".io",
+    "search", "google", "look up", "lookup", "latest", "current",
+    "today", "news", "weather", "price", "stock", "version",
+    "calculate", "compute", "convert", "remember", "fetch", "url",
+    "who is", "what year", "when did", "how much", "how many",
+)
+
+def _needs_full_pipeline(msg: str) -> bool:
+    """Conservative gate. Return True (use full ReAct) whenever there is ANY
+    hint the message might need a tool, is long, contains code, or has math.
+    Only clearly simple, short, conversational messages return False."""
+    if not msg:
+        return False
+    text = msg.strip()
+    low = text.lower()
+    # Long messages: let the full pipeline handle context/tools.
+    if len(text) > 240 or text.count("\n") >= 3:
+        return True
+    # Code fences or obvious code punctuation density.
+    if "```" in text or text.count(";") >= 3 or "def " in low or "import " in low:
+        return True
+    # Arithmetic like 2+2, 45 * 9, 100/4 -> let calc route.
+    if _re.search(r"\d\s*[-+*/^]\s*\d", text):
+        return True
+    # Any tool-hint keyword/substring.
+    if any(h in low for h in _TOOL_HINTS):
+        return True
+    return False
+
 class ReActAgent:
     def __init__(self, llm: AsyncLocalLLM, tools: AsyncToolRegistry, mem: ConversationMemory, kb: LiteVectorStore, graph: LWWGraph, system_prompt: str, max_steps: int, inbox: MemoryInbox, user_profile: UserProfile, style_adapter: StyleAdapter, distill_facts: bool = True):
         self.llm, self.tools, self.mem, self.kb, self.graph, self.inbox = llm, tools, mem, kb, graph, inbox
@@ -53,7 +90,16 @@ class ReActAgent:
         # 1. Update style model based on user input
         self.style_adapter.analyze_message(user)
 
-        # 2. Get contextual system prompt parts
+        # FAST PATH: for short, clearly-conversational messages (greetings, small
+        # talk, brief questions with no tool hints) skip the routing call, RAG
+        # retrieval, and fact distillation entirely and stream a single answer.
+        # This turns a plain "hello" from three sequential model calls into one.
+        if not _needs_full_pipeline(user):
+            async for tok in self._fast_answer(session_id, user, cancel):
+                yield tok
+            return
+
+        # 2. Get contextual system prompt parts (full ReAct path below).
         profile_prompt = self.profile.get_system_prompt_addon()
         style_prompt = self.style_adapter.get_adapted_prompt_prefix()
 
@@ -120,6 +166,24 @@ class ReActAgent:
             yield tok
         self.mem.add_message(session_id, user, full_answer, context="\n".join(observations))
         await self._maybe_distill_facts(user, full_answer)
+
+    async def _fast_answer(self, session_id: str, user: str, cancel: asyncio.Event) -> AsyncGenerator[str, None]:
+        """Single-generation answer for simple messages. No routing, no RAG, no
+        distillation. Still records the turn so conversation history is intact."""
+        profile_prompt = self.profile.get_system_prompt_addon()
+        style_prompt = self.style_adapter.get_adapted_prompt_prefix()
+        full_system_prompt = f"{self.system_prompt} {profile_prompt} {style_prompt}".strip()
+        # Include only recent conversation for continuity; no RAG/observations.
+        scratch = self.mem.get_recent_context(session_id)
+        final_prompt = final_answer_prompt(full_system_prompt, scratch, "", "", user)
+        full_answer = ""
+        async for tok in self.llm.stream_async(final_prompt, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
+            full_answer += tok
+            yield tok
+        self.mem.add_message(session_id, user, full_answer, context="")
+        # Deliberately NO _maybe_distill_facts here: the fast path is for simple
+        # chatter, and distillation is the extra per-turn model call we are
+        # avoiding. Fact extraction still runs on full-pipeline turns.
 
     async def _maybe_distill_facts(self, user: str, reply: str):
         # Skipping this saves one full LLM generation per chat turn.
