@@ -33,6 +33,12 @@
 - **Chat no longer shows the model's internal reasoning (`src/agent/react_async.py`):** On any tool-using turn the agent streamed a "Thinking:/Action:" block into the same output as the reply, so the model's rationale and the raw tool call were glued onto the front of the user-facing answer (most visible on the large model, which picks tools more often).
   - Removed the yield that emitted that block. The tool still runs and the rationale and observations still feed the model through the scratchpad; only the user-facing leak is gone, so the chat now contains just the final answer.
 
+### User Interface
+- **Removed the redundant Model status box (`src/ui/gui.py`):** The Models panel had an "Active model" dropdown plus a separate "Model status" textbox that only echoed the last switch result. The status was redundant, since the dropdown value already indicates the active model. Removed the textbox; the switch handler now returns the selected name straight back into the dropdown, so the dropdown is the single source of truth and always shows the model in use.
+- **Replaced the purple theme with a blue dark/light theme (`src/ui/gui.py`):** The UI used Gradio's built-in Soft theme, whose purple accents were unwanted, and an earlier CSS-only override only reached some surfaces and left the UI half-styled.
+  - The theme is now configured through Gradio's theme object with `.set()`, which applies consistently across every component, rather than through CSS variable overrides. Colors were taken from the target design: page `#0e1014`, panels `#141c2b`, right panels and accordions `#1a2334`, borders `#1e2b45`, primary button `#274270` in dark (brighter on hover), input `#0e1014`, text `#e8eefc`. Light mode is a clean inversion using a `#2563eb` blue accent.
+  - The light, dark, and system toggle is preserved, and all three modes use blue with no purple. Focus rings, sliders, and toggles are forced to blue as a safety net. All theme parameters were verified against the pinned Gradio 5.50.0 so the app does not crash at launch.
+
 ## v1.2.0.0 - [current]
 
 ### Web Access
