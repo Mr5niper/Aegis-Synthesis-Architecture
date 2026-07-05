@@ -38,6 +38,7 @@ from .ui.gui import launch_gui
 from .ui.consent import ConsentBroker
 
 from .utils.download import download_file
+from .utils.hardware import detect_hardware, plan_model_params, describe as describe_hw
 
 MODEL_THREADS = max(2, os.cpu_count() or 2)
 NEXUS_URL = os.getenv("AEGIS_NEXUS_URL", "ws://127.0.0.1:7861")
@@ -188,24 +189,75 @@ def main():
             sys.exit(1)
     
     ensure_dirs(cfg)
-    
+
+    # Detect hardware once so every model is built with settings that fit this
+    # machine (threads, context, and GPU offload) instead of the old hardcoded
+    # CPU-only values. Fully best-effort: on any failure it returns safe CPU
+    # defaults. Note: GPU offload only takes effect if the installed
+    # llama-cpp-python was built with a GPU backend (see utils/hardware.py).
+    hw = detect_hardware()
+    print(f"[hardware] {describe_hw(hw)}")
+
     model_manager = ModelManager()
-    
-    # 1. Load Models and Download
+
+    # Each GGUF model was trained for a maximum context length; using more than
+    # this degrades output. llama.cpp reports it at load as n_ctx_train, but we
+    # need it BEFORE load to size n_ctx, so we keep a small known-values table
+    # keyed by a substring of the model file/name. Anything not listed falls
+    # back to 0 = unknown, which makes plan_model_params stay at the configured
+    # baseline (no upward scaling) to stay safe. Update this if models change.
+    CTX_TRAIN_MAX = {
+        "llama-3.2": 131072,   # Llama-3.2-3B-Instruct: 128K trained context
+        "mistral-7b": 32768,   # Mistral-7B-Instruct-v0.3: 32K trained context
+    }
+
+    def _ctx_train_max_for(mc) -> int:
+        hay = (mc.path + " " + mc.name).lower()
+        for key, val in CTX_TRAIN_MAX.items():
+            if key in hay:
+                return val
+        return 0
+
+    # 1. Register models as LAZY BUILDERS (download now if missing, but do NOT
+    #    load into memory yet). Only the active model is loaded, on first use,
+    #    and it is unloaded when the user switches models. This gives the active
+    #    model the whole GPU so it can run a large context; the cost is a few
+    #    seconds to load on a deliberate switch. Because only ONE model is
+    #    resident at a time, each model is sized against the whole card
+    #    (concurrent_models=1), not a divided share.
     for model_cfg_data in cfg.models:
         model_cfg = ModelConfig(**model_cfg_data)
         mp = Path(model_cfg.path)
         if not mp.exists():
             print(f"Model '{model_cfg.name}' not found. Downloading...")
             download_file(model_cfg.url, mp, model_cfg.sha256 or "")
-            
-        llm_instance = AsyncLocalLLM(
-            model_cfg.path, 
-            n_ctx=model_cfg.ctx_size, 
-            n_threads=MODEL_THREADS, 
-            n_gpu_layers=model_cfg.n_gpu_layers
-        )
-        model_manager.register_model(model_cfg.name, llm_instance)
+
+        # Plan params from detected hardware. Config still has the final say:
+        # a non-zero n_gpu_layers in config is treated as an explicit override;
+        # 0 means 'auto' (offload all layers if a usable GPU backend exists).
+        params = plan_model_params(hw, model_cfg.ctx_size, model_cfg.n_gpu_layers,
+                                   ctx_train_max=_ctx_train_max_for(model_cfg),
+                                   concurrent_models=1)
+        print(f"[model:{model_cfg.name}] planned n_ctx={params['n_ctx']} "
+              f"n_threads={params['n_threads']} n_gpu_layers={params['n_gpu_layers']} "
+              f"(loads on first use)")
+
+        # Bind the current values into a builder. Default args capture them by
+        # value so the loop variable does not leak across iterations.
+        def _make_builder(path=model_cfg.path, p=params, name=model_cfg.name):
+            def _build():
+                print(f"[model:{name}] loading into memory...")
+                inst = AsyncLocalLLM(
+                    path,
+                    n_ctx=p['n_ctx'],
+                    n_threads=p['n_threads'],
+                    n_gpu_layers=p['n_gpu_layers'],
+                )
+                print(f"[model:{name}] loaded (n_ctx={p['n_ctx']}).")
+                return inst
+            return _build
+
+        model_manager.register_model(model_cfg.name, _make_builder())
 
     bus = EventBus()
 
@@ -235,15 +287,19 @@ def main():
     mem = ConversationMemory(cfg.paths.conversation_db)
     graph = LWWGraph(cfg.paths.memory_graph_db)
     inbox = MemoryInbox(cfg.paths.inbox_db)
-    # context_window = ContextWindow(model_manager.get_active().n_ctx) # Not used directly in main_gui, but available
+    # context_window = ContextWindow(...)  # available if needed; get_active() is now async
 
     peer_id = f"agent-{uuid.uuid4().hex[:6]}"
     ed_sk, ed_vk = load_or_create_keys(peer_id, cfg.paths.keys_dir)
     p2p = P2P(peer_id, NEXUS_URL, ed_sk)
 
-    # Initialize background agents with the currently active model
-    sentinel = Sentinel(model_manager.get_active(), bus, policy) 
-    curator = Curator(model_manager.get_active(), bus, policy, graph, kb) 
+    # Initialize background agents with the MODEL MANAGER (not a fixed llm).
+    # With lazy one-at-a-time loading there is no single persistent instance to
+    # hand them; instead they fetch the active model from the manager at call
+    # time, so they always use whatever is currently loaded and never hold a
+    # reference to a model that has been unloaded by a switch.
+    sentinel = Sentinel(model_manager, bus, policy)
+    curator = Curator(model_manager, bus, policy, graph, kb)
     
     install_shutdown(p2p, sentinel, curator) # Updated shutdown call
 
@@ -259,9 +315,11 @@ def main():
 
     tools = AsyncToolRegistry(kb, cfg, peer_client=p2p)
     
-    # Agent factory must fetch the current LLM model on demand
-    def agent_factory():
-        llm_current = model_manager.get_active()
+    # Agent factory fetches the current LLM on demand. get_active() is async
+    # (it lazily loads the active model if not resident), so the factory is
+    # async too; the UI awaits it once per turn.
+    async def agent_factory():
+        llm_current = await model_manager.get_active()
         return ReActAgent(
             llm_current, tools, mem, kb, graph, cfg.assistant.system_prompt, 
             cfg.assistant.max_reasoning_steps, inbox=inbox,
@@ -309,15 +367,15 @@ def main():
     identity = (peer_id, verify_key_b64(ed_vk), verify_key_fingerprint(ed_vk))
     model_names = model_manager.list_models()
 
-    def switch_model_cb(name: str) -> str:
-        ok = model_manager.switch_model(name)
+    async def switch_model_cb(name: str) -> str:
+        # switch_model is async: it unloads the current model (waiting for any
+        # in-flight inference) and the next get_active() lazily loads the new
+        # one. Background agents read the active model from the manager at call
+        # time, so there is no set_llm to update here.
+        ok = await model_manager.switch_model(name)
         if not ok:
             return f"Unknown model: {name}"
-        # Hot-swap LLM for background agents too
-        new_llm = model_manager.get_active()
-        sentinel.set_llm(new_llm)
-        curator.set_llm(new_llm)
-        return f"Switched to: {name}"
+        return f"Switched to: {name} (loads on next use)"
 
     launch_gui(
         agent_factory=agent_factory,
