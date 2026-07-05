@@ -197,12 +197,70 @@ goto :llama_done
 :llama_vulkan
 echo [STEP 5/7] Compiling llama-cpp-python==%LLAMA_VERSION% from source with Vulkan...
 echo          (This is the slow step and needs the Vulkan SDK + CMake + MSVC C++ tools.)
-:: -DGGML_VULKAN=on turns on the Vulkan backend. --no-binary llama-cpp-python forces
-:: a from-source build so the flag takes effect (a prebuilt wheel would ignore it).
-:: We deliberately do NOT pass --only-binary here because we WANT a source build for
-:: this one package. CMAKE_ARGS is read by the llama-cpp-python build backend.
-set "CMAKE_ARGS=-DGGML_VULKAN=on"
-pip install --no-cache-dir --no-binary llama-cpp-python "llama-cpp-python==%LLAMA_VERSION%"
+:: --------------------------------------------------------------------------
+:: This 0.3.2-era llama.cpp fails to compile against the newer Windows SDK
+:: (26100) + MSVC 17.13+ because two of its C++ files (common/common.cpp and
+:: common/log.cpp) use std::chrono without #include <chrono>; older SDKs
+:: pulled it in transitively, the new one does not. See llama.cpp issue
+:: #11834. A global force-include (/FIchrono) does not work here because this
+:: codebase compiles .c and .cpp in the same targets, so the C++-only <chrono>
+:: header leaks onto C files and trips STL1003. The robust, repeatable fix is
+:: to add the missing #include to just those two C++ files, then build.
+::
+:: Because pip downloads fresh source each run, we do it in explicit steps:
+::   1. download the pinned sdist, 2. unpack it, 3. append #include <chrono>
+::   to the two files (idempotent), 4. pip install that patched local dir.
+:: -DLLAVA_BUILD=OFF additionally skips the llava/clip vision example, which
+:: this app does not use and which is the other thing that failed to build.
+::
+:: Everything runs inside a work dir under the build tree; %TEMP% is avoided
+:: so paths stay short and predictable. The dir is cleaned first each run.
+set "LCP_WORK=%CD%\_lcpb"
+set "LCP_SDIST=%LCP_WORK%\llama_cpp_python-%LLAMA_VERSION%.tar.gz"
+set "LCP_SRC=%LCP_WORK%\llama_cpp_python-%LLAMA_VERSION%"
+
+if exist "%LCP_WORK%" rmdir /S /Q "%LCP_WORK%"
+mkdir "%LCP_WORK%"
+
+:: 5a. Download the exact pinned sdist from PyPI (curl ships with Windows 10+).
+echo [INFO]   Downloading llama-cpp-python==%LLAMA_VERSION% source distribution...
+curl -sL -o "%LCP_SDIST%" https://files.pythonhosted.org/packages/source/l/llama-cpp-python/llama_cpp_python-%LLAMA_VERSION%.tar.gz
+if errorlevel 1 (
+    echo [ERROR] Failed to download the llama-cpp-python source distribution.
+    goto :error
+)
+
+:: 5b. Unpack it (tar ships with Windows 10+). Exclude vendor/.../spm-headers:
+::     those 7 entries are SYMLINKS (used only for Swift Package Manager builds,
+::     never on Windows) and Windows tar cannot create them, failing the whole
+::     extract with "Invalid argument". The real headers they point to are
+::     separate normal files in the archive, so skipping the symlink dir loses
+::     nothing the Vulkan/Windows build needs.
+echo [INFO]   Extracting source...
+tar -xzf "%LCP_SDIST%" -C "%LCP_WORK%" --exclude="*/spm-headers/*" --exclude="*/spm-headers"
+if errorlevel 1 (
+    echo [ERROR] Failed to extract the llama-cpp-python source distribution.
+    goto :error
+)
+
+:: 5c. Patch the two C++ files that are missing #include <chrono>. Idempotent:
+::     only prepends the include if it is not already the first line. Uses
+::     PowerShell (always present) so we do not depend on sed/awk on Windows.
+echo [INFO]   Patching common.cpp and log.cpp with #include ^<chrono^> ...
+for %%F in (common.cpp log.cpp) do (
+    powershell -NoProfile -Command "$f = Join-Path '%LCP_SRC%' 'vendor\llama.cpp\common\%%F'; $c = Get-Content -LiteralPath $f -Raw; if ($c -notmatch '#include <chrono>') { Set-Content -LiteralPath $f -Value ('#include <chrono>' + [Environment]::NewLine + $c) -NoNewline }"
+    if errorlevel 1 (
+        echo [ERROR] Failed to patch %%F with the chrono include.
+        goto :error
+    )
+)
+
+:: 5d. Build+install the PATCHED local source. -DGGML_VULKAN=on enables the
+::     Vulkan backend; -DLLAVA_BUILD=OFF skips the unused vision example.
+::     No /FIchrono. Installing from the local dir uses the patched files.
+set "CMAKE_ARGS=-DGGML_VULKAN=on -DLLAVA_BUILD=OFF"
+echo [INFO]   Compiling patched source (Vulkan, no llava). This is the slow part...
+pip install --no-cache-dir --no-binary llama-cpp-python "%LCP_SRC%"
 if errorlevel 1 (
     echo.
     echo [ERROR] The Vulkan build of llama-cpp-python failed to compile.
@@ -210,11 +268,12 @@ if errorlevel 1 (
     echo           - Vulkan SDK / CMake / MSVC C++ tools not fully installed.
     echo           - Run from the "x64 Native Tools Command Prompt for VS 2022"
     echo             so the compiler is on PATH.
-    echo           - Known upstream issue: Vulkan shader compile can fail on Windows;
-    echo             see docs/BUILD_GPU_BACKENDS.md.
     echo         To build a working CPU-only exe instead, run:  BUILD_EXE.bat cpu
     goto :error
 )
+
+:: 5e. Clean up the work dir on success (leave it on failure for debugging).
+rmdir /S /Q "%LCP_WORK%"
 goto :llama_done
 
 :llama_done
