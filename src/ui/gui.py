@@ -147,22 +147,80 @@ def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
 
 def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contacts, kairos, inbox: MemoryInbox, graph: LWWGraph, sync_service: SyncService, broker: ConsentBroker = None, identity=None, trainer: LoRATrainer = None, style_adapter: StyleAdapter = None, model_names: list[str] = None, on_switch_model=None, cfg=None, policy=None):
     
-    # FIX #1: Custom CSS to resolve the double scrollbar issue.
+    # Theme + palette. We build on gr.themes.Base (which, unlike Soft, carries
+    # no purple defaults) with a blue primary hue, then pin exact colors for
+    # dark and light via CSS variables so both modes match the intended look
+    # (deep navy dark; a clean light inversion). The light/dark toggle is kept.
+    aegis_theme = gr.themes.Base(
+        primary_hue=gr.themes.colors.blue,
+        secondary_hue=gr.themes.colors.blue,
+        neutral_hue=gr.themes.colors.slate,
+        font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
+    )
+
     custom_css = """
-    /* Ensure the Chatbot container has clear scroll boundaries */
+    /* ---- Chatbot scroll boundaries (keep the double-scrollbar fix) ---- */
     .chatbot-container {
-        /* Gradio sets height=600, which enforces internal scroll. */
-        /* We enforce the scroll here and ensure the outer column doesn't also scroll */
-        max-height: 600px !important; 
+        max-height: 600px !important;
         overflow-y: auto !important;
     }
-    /* Prevent the parent Gradio column from scrolling */
-    .gradio-column {
-        overflow: visible !important;
+    .gradio-column { overflow: visible !important; }
+
+    /* ---- DARK MODE palette (deep navy + blue accent, no purple) ---- */
+    .dark {
+        --body-background-fill: #0b1220;
+        --background-fill-primary: #0f1729;
+        --background-fill-secondary: #16223b;
+        --block-background-fill: #0f1729;
+        --block-border-color: #1e2b45;
+        --border-color-primary: #1e2b45;
+        --border-color-accent: #2563eb;
+        --color-accent: #3b82f6;
+        --color-accent-soft: #16223b;
+        --link-text-color: #60a5fa;
+        --primary-500: #2563eb;
+        --primary-600: #1d4ed8;
+        --button-primary-background-fill: #2563eb;
+        --button-primary-background-fill-hover: #1d4ed8;
+        --button-primary-text-color: #ffffff;
+        --input-background-fill: #0b1220;
+        --body-text-color: #e5eefc;
+        --body-text-color-subdued: #94a3b8;
+    }
+
+    /* ---- LIGHT MODE palette (light inversion of the same blue look) ---- */
+    body:not(.dark), .light {
+        --body-background-fill: #f4f7fb;
+        --background-fill-primary: #ffffff;
+        --background-fill-secondary: #eef3fa;
+        --block-background-fill: #ffffff;
+        --block-border-color: #d7e0ee;
+        --border-color-primary: #d7e0ee;
+        --border-color-accent: #2563eb;
+        --color-accent: #2563eb;
+        --color-accent-soft: #e8f0fe;
+        --link-text-color: #1d4ed8;
+        --primary-500: #2563eb;
+        --primary-600: #1d4ed8;
+        --button-primary-background-fill: #2563eb;
+        --button-primary-background-fill-hover: #1d4ed8;
+        --button-primary-text-color: #ffffff;
+        --input-background-fill: #ffffff;
+        --body-text-color: #0f1729;
+        --body-text-color-subdued: #52607a;
+    }
+
+    /* ---- Kill any remaining purple from focus rings / sliders / toggles ---- */
+    *:focus-visible { outline-color: #2563eb !important; }
+    input[type=range] { accent-color: #2563eb !important; }
+    input[type=checkbox], input[type=radio] { accent-color: #2563eb !important; }
+    .dark input:focus, .dark textarea:focus, .dark select:focus {
+        border-color: #2563eb !important;
+        box-shadow: 0 0 0 1px #2563eb !important;
     }
     """
     
-    with gr.Blocks(theme=gr.themes.Soft(), title="Aegis Synthesis", css=custom_css) as demo:
+    with gr.Blocks(theme=aegis_theme, title="Aegis Synthesis", css=custom_css) as demo:
         gr.Markdown(f"# {get_version_info()}")
         
         with gr.Row():
