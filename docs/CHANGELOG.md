@@ -1,6 +1,6 @@
 # AEGIS SYNTHESIS ARCHITECTURE CHANGELOG
 
-## vX.X.X.X - [unreleased]
+## v1.3.0.0 - [current]
 
 ### GPU Acceleration
 - **Single all-inclusive Vulkan GPU build (`BUILD_EXE.bat`, `docs/BUILD_GPU_BACKENDS.md`):** The build produced a CPU-only exe. It now compiles llama-cpp-python against the Vulkan backend so one executable uses whatever GPU is present (AMD, NVIDIA, or Intel) at runtime and falls back to CPU when there is none, with nothing for end users to install. The Vulkan runtime ships inside the graphics driver users already have; the Vulkan SDK, CMake, and MSVC C++ tools are needed only on the build machine. Verified on an AMD Radeon RX 7700 XT with full offload.
@@ -44,7 +44,7 @@
   - Removed the status box, and removed a leftover note about `config.yaml` being rewritten on save, which was redundant once saving became automatic.
 - **Updated the application icon (`aegis.ico`):** Replaced the executable icon with a new one. Picked up by PyInstaller from the path in `assistant_gui.spec` on the next build.
 
-## v1.2.0.0 - [current]
+## v1.2.0.0
 
 ### Web Access
 - **In-app Web Access settings panel (`src/ui/gui.py`, `src/core/config.py`, `src/main_gui.py`):** Which sites the assistant could fetch was controlled only by hand-editing `allow_domains` in `config.yaml`, and there was no way to allow all sites short of emptying that list manually. A `fetch_url` on a site that was not on the list (for example github.com) was blocked with a security-restriction message.

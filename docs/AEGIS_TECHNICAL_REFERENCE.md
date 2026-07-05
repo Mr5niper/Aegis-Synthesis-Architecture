@@ -1,7 +1,7 @@
 # Aegis Synthesis Architecture - Technical Reference Manual
 
-**Version:** 1.2  
-**Date:** June 2026  
+**Version:** 1.3.0.0  
+**Date:** July 2026  
 
 ---
 
@@ -9,7 +9,7 @@
 
 Aegis Synthesis Architecture (ASA) is a sovereign, local-first personal AI system that combines:
 
-- Local LLM inference with multi-model hot-swapping
+- Local LLM inference (GPU-accelerated via Vulkan, CPU fallback) with lazy, one-at-a-time model loading and switching
 - Retrieval-augmented generation (RAG) with a local vector store
 - Proactive agents (Sentinel/Curator) running asynchronously
 - Secure end-to-end encrypted (E2EE) P2P collaboration with explicit consent
@@ -70,7 +70,7 @@ ASA is designed for privacy, reliability, and extensibility. It treats a single 
 - LoRA correction logging and training dataset preparation with a UI viewer
 
 ### UI
-- Gradio web app with chat, suggestions, model switcher, memory inbox, consent panel, training viewer, identity panel, contacts/collaboration panel
+- Gradio web app with chat, suggestions, model switcher (dropdown reflects the active model; no status box), an in-app Web Access panel that saves automatically, memory inbox, consent panel, training viewer, identity panel, contacts/collaboration panel, and a blue light/dark theme
 - Headless/server mode for non-interactive nodes
 
 ### Build and Ops
@@ -87,8 +87,8 @@ ASA is designed for privacy, reliability, and extensibility. It treats a single 
 
 #### Core (`src/core`)
 - `config.py`: Pydantic-driven configuration (models, assistant behavior, paths)
-- `llm_async.py`: Async wrapper around llama-cpp for blocking API with a semaphore to avoid concurrency issues, providing generate and stream
-- `model_manager.py`: Multiple model management with active switching
+- `llm_async.py`: Async wrapper around llama-cpp for the blocking API with a semaphore to avoid concurrency issues, providing generate and stream; also provides `unload()` (frees the model and its GPU/CPU memory after any in-flight inference) and `is_loaded()`
+- `model_manager.py`: Lazy, one-at-a-time model management. Holds model builders (not prebuilt instances) and keeps only the active model resident; builds it on first use and unloads it on switch. `get_active()` and `switch_model()` are async and serialized by a single swap lock so a switch cannot free a model a caller is about to use.
 - `policy.py`: Rate limiting, quiet hours, web domain allowlist
 - `prompt.py`/`schemas.py`: Prompt builders and pydantic schemas for tool-calls, events
 - `validate.py`: Configuration validation checks
@@ -120,8 +120,8 @@ ASA is designed for privacy, reliability, and extensibility. It treats a single 
 - `protocol_kairos.py`: High-level wrapper for initiating a collaboration session
 
 #### Proactive (`src/proactive`)
-- `sentinel.py`: Clipboard/window monitor with suggestions; supports updating LLM after model switch
-- `curator.py`: Background suggestions over knowledge graph; also supports dynamic LLM update
+- `sentinel.py`: Clipboard/window monitor with suggestions; holds the model manager and fetches the active model at call time
+- `curator.py`: Background suggestions over the knowledge graph; also holds the model manager and fetches the active model at call time
 
 #### Secure (`src/secure`)
 - `crypto.py`: Key generation, ed25519curve25519 conversion, basic b64 helpers, fingerprints
@@ -141,9 +141,10 @@ ASA is designed for privacy, reliability, and extensibility. It treats a single 
 #### Utils (`src/utils`)
 - `download.py`: First-run model download with optional SHA256 validation
 - `db.py`: SQLite pragmas for WAL/synchronous/busy_timeout
+- `hardware.py`: Runtime hardware detection (CPU threads, RAM, GPU vendor and VRAM) and per-model parameter planning (n_threads, n_ctx, n_gpu_layers). Sizes context from VRAM on a GPU build and from RAM on a CPU build, treats config ctx_size as a floor, caps at the model trained maximum, and prints `[hardware]` and `[ctx]` lines at startup.
 
 #### Entry Points
-- `main_gui.py`: GUI orchestration; model loading; config validation; shutdown hooks; background tasks; UI launch; model switching updates sentinel/curator LLM
+- `main_gui.py`: GUI orchestration; lazy model registration; config validation; shutdown hooks; background tasks; UI launch; async model switching (unload/lazy-load)
 - `main_headless.py`: Headless server-mode node; denies consent by default
 - `nexus_server.py`: Stateless WebSocket relay; peer updates; routing; health endpoints
 
@@ -271,14 +272,16 @@ ASA is designed for privacy, reliability, and extensibility. It treats a single 
 ## 8. Model Management and Rationale
 
 - **llama-cpp-python** for local inference:
-  - Deterministic, CPU-first; optional GPU offload via `n_gpu_layers`
+  - The Windows build is compiled against the Vulkan backend, so one executable uses whatever GPU is present (AMD, NVIDIA, or Intel) and falls back to CPU when none is usable. GPU offload is automatic (`n_gpu_layers`: 0 in config means auto, offloading all layers when a usable GPU is detected). A CPU-only fallback build is also available.
   - Async wrapper ensures semaphore-guarded access to prevent concurrency-related issues
-- **Multi-model Manager:**
+- **Lazy, one-at-a-time Model Manager:**
   - Register "default" and "large" or more; actively switchable in UI
-  - Sentinel/Curator update LLM via `set_llm()` instantly upon switch
+  - Only the ACTIVE model is resident. The manager holds builders and constructs the active model on first use, unloading the previous one on switch, so the active model gets the whole GPU and can run a larger context. Switching costs a few seconds to load the new model.
+  - `get_active()` and `switch_model()` are async and serialized by a swap lock; `AsyncLocalLLM.unload()` waits for any in-flight inference before freeing the model. Background agents fetch the active model from the manager at call time rather than caching an instance (there is no `set_llm`).
+  - Context length is chosen at startup by `hardware.plan_model_params`: from VRAM on a GPU build (where the KV cache lives) and from RAM on a CPU build, with config ctx_size as a floor and the model trained maximum as a cap. If a GPU is present but VRAM cannot be read, a safe fixed ceiling is used instead of RAM.
 
 **Why this approach:**
-- Keeps footprint manageable; no giant server side
+- Keeps footprint manageable; only one model resident, so the active model gets the full device
 - Gives engineers control over tradeoffs: RAM vs speed vs accuracy
 - Avoids dependency on networked inference
 
@@ -358,7 +361,7 @@ python build_executable.py
 
 ### 10.4 Models
 
-- Drop-down to switch active model; status shows success; Sentinel/Curator are re-pointed automatically
+- Drop-down to switch the active model; the dropdown reflects the model in use. Switching unloads the current model and loads the chosen one (a few seconds). Background agents pick up the active model automatically at their next call.
 
 ### 10.5 Feedback/Corrections
 
@@ -374,7 +377,8 @@ python build_executable.py
 
 ## 11. Performance, Scaling, and Tuning
 
-- **LLM threads**: set `n_threads` to CPU count for throughput; adjust `n_gpu_layers` if compiled with GPU/MPS/Metal to offload layers
+- **LLM threads and offload**: `n_threads`, `n_ctx`, and `n_gpu_layers` are chosen automatically at startup by `hardware.plan_model_params` from the detected CPU, RAM, and GPU/VRAM. On the Vulkan build all layers offload to the GPU when one is usable; on CPU-only it runs on the CPU. Config values act as overrides/floors, not required settings.
+- **Context sizing**: sized from VRAM on a GPU build and RAM on a CPU build, capped at the model trained maximum. Only one model is resident, so the active model is sized against the whole device.
 - **Sentence-transformers**: warm-up step avoids first inference latency
 - **Vector store**: suitable up to tens of thousands of chunks. For larger corpora, replace with FAISS (not included by default to keep packaging simpler)
 - **SQLite WAL**: store DBs on SSD; avoid networked file systems for concurrency
@@ -467,7 +471,7 @@ python build_executable.py
 - `src/tools/*.py`: Tool registry; sandboxed code exec; session tools
 - `src/memory/*.py`: All persistence stores and CRDT implementation
 - `src/mesh/*.py`: P2P E2EE client; ephemeral session and protocol wrapper
-- `src/proactive/*.py`: Sentinel and Curator background agents with dynamic LLM updates
+- `src/proactive/*.py`: Sentinel and Curator background agents; fetch the active model from the manager at call time
 - `src/ui/*.py`: Gradio UI and panels
 - `src/internet/*.py`: Web search/fetch + cache
 - `src/secure/*.py`: Keys, consent tokens, contacts
@@ -555,7 +559,7 @@ This document should be sufficient to build, operate, extend, and reason about t
 **Document Information:**
 
 **Title:** Aegis Synthesis Architecture - Technical Reference Manual  
-**Version:** 1.2  
-**Date:** June 2026  
+**Version:** 1.3.0.0  
+**Date:** July 2026  
 
 ---
