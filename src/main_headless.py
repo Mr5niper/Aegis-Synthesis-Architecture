@@ -30,23 +30,24 @@ async def main_async():
     
     model_manager = ModelManager()
     
-    # Load Models and Download
+    # Register models as lazy builders (see ModelManager). Headless mode never
+    # switches models, but it uses the same manager API, so it registers a
+    # builder and awaits get_active() to load the one model it needs.
     for model_cfg_data in cfg.models:
         model_cfg = ModelConfig(**model_cfg_data)
         mp = Path(model_cfg.path)
         if not mp.exists():
             print(f"Model '{model_cfg.name}' not found. Downloading...")
             download_file(model_cfg.url, mp, model_cfg.sha256 or "")
-            
-        llm_instance = AsyncLocalLLM(
-            model_cfg.path, 
-            n_ctx=model_cfg.ctx_size, 
-            n_threads=MODEL_THREADS, 
-            n_gpu_layers=model_cfg.n_gpu_layers
-        )
-        model_manager.register_model(model_cfg.name, llm_instance)
 
-    llm = model_manager.get_active()
+        def _make_builder(path=model_cfg.path, ctx=model_cfg.ctx_size, ngl=model_cfg.n_gpu_layers):
+            def _build():
+                return AsyncLocalLLM(path, n_ctx=ctx, n_threads=MODEL_THREADS, n_gpu_layers=ngl)
+            return _build
+
+        model_manager.register_model(model_cfg.name, _make_builder())
+
+    llm = await model_manager.get_active()
     
     kb = LiteVectorStore(cfg.paths.knowledge_base_db, cfg.embeddings.model_name)
     mem = ConversationMemory(cfg.paths.conversation_db)

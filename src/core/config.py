@@ -12,7 +12,7 @@ class AssistantConfig(BaseModel):
     tool_timeout_sec: int = 20; proactive_enabled: bool = True
     quiet_hours: Tuple[int, int] = (23, 7); suggestions_per_min: int = 5
     allow_domains: List[str] = Field(default_factory=list)
-    distill_facts: bool = True  # NEW: run fact-extraction generation after each turn
+    distill_facts: bool = False  # run a fact-extraction generation after each full-pipeline turn; off by default to save one model call per message (the fast path never distills regardless)
     allow_code_exec: bool = False
 
 class UserProfileConfig(BaseModel):

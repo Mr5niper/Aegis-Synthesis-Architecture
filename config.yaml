@@ -25,9 +25,11 @@ assistant:
   quiet_hours: [23, 7] # 11 PM to 7 AM
   suggestions_per_min: 5
   allow_domains: ["wikipedia.org", "pypi.org", "python.org", "arxiv.org", "numpy.org", "pytorch.org"]
-  # Distill user facts after each turn. Costs one extra LLM generation per message.
-  # Turn off if you want maximum chat responsiveness.
-  distill_facts: true
+  # Distill user facts after each full-pipeline turn. Costs one extra LLM
+  # generation per message, so it is OFF by default for responsiveness. Simple
+  # messages take the fast path and never distill regardless. Set to true to
+  # re-enable background fact learning (facts still require Inbox approval).
+  distill_facts: false
   allow_code_exec: false
 
 user_profile:

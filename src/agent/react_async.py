@@ -3,7 +3,7 @@ import asyncio
 from typing import AsyncGenerator, Optional
 from pydantic import ValidationError
 from ..core.llm_async import AsyncLocalLLM
-from ..core.prompt import react_step_prompt, final_answer_prompt
+from ..core.prompt import react_step_prompt, final_answer_prompt, build_answer_messages
 from ..core.schemas import ToolCall
 from ..tools.registry_async import AsyncToolRegistry
 from ..memory.vector_store import LiteVectorStore
@@ -41,6 +41,43 @@ _ANSWER_STOP = [
     "\nObservation:", "\nAction:", "\nThinking:", "\nThought:",
 ]
 
+# Signals that a message needs the full ReAct pipeline (tools/RAG). If NONE of
+# these are present and the message is short, we take the fast path: a single
+# streamed generation with no routing call, no RAG retrieval, and no fact
+# distillation. This is what makes a plain "hello" fast instead of running
+# three sequential model calls.
+import re as _re
+
+_TOOL_HINTS = (
+    "http://", "https://", "www.", ".com", ".org", ".net", ".io",
+    "search", "google", "look up", "lookup", "latest", "current",
+    "today", "news", "weather", "price", "stock", "version",
+    "calculate", "compute", "convert", "remember", "fetch", "url",
+    "who is", "what year", "when did", "how much", "how many",
+)
+
+def _needs_full_pipeline(msg: str) -> bool:
+    """Conservative gate. Return True (use full ReAct) whenever there is ANY
+    hint the message might need a tool, is long, contains code, or has math.
+    Only clearly simple, short, conversational messages return False."""
+    if not msg:
+        return False
+    text = msg.strip()
+    low = text.lower()
+    # Long messages: let the full pipeline handle context/tools.
+    if len(text) > 240 or text.count("\n") >= 3:
+        return True
+    # Code fences or obvious code punctuation density.
+    if "```" in text or text.count(";") >= 3 or "def " in low or "import " in low:
+        return True
+    # Arithmetic like 2+2, 45 * 9, 100/4 -> let calc route.
+    if _re.search(r"\d\s*[-+*/^]\s*\d", text):
+        return True
+    # Any tool-hint keyword/substring.
+    if any(h in low for h in _TOOL_HINTS):
+        return True
+    return False
+
 class ReActAgent:
     def __init__(self, llm: AsyncLocalLLM, tools: AsyncToolRegistry, mem: ConversationMemory, kb: LiteVectorStore, graph: LWWGraph, system_prompt: str, max_steps: int, inbox: MemoryInbox, user_profile: UserProfile, style_adapter: StyleAdapter, distill_facts: bool = True):
         self.llm, self.tools, self.mem, self.kb, self.graph, self.inbox = llm, tools, mem, kb, graph, inbox
@@ -53,7 +90,16 @@ class ReActAgent:
         # 1. Update style model based on user input
         self.style_adapter.analyze_message(user)
 
-        # 2. Get contextual system prompt parts
+        # FAST PATH: for short, clearly-conversational messages (greetings, small
+        # talk, brief questions with no tool hints) skip the routing call, RAG
+        # retrieval, and fact distillation entirely and stream a single answer.
+        # This turns a plain "hello" from three sequential model calls into one.
+        if not _needs_full_pipeline(user):
+            async for tok in self._fast_answer(session_id, user, cancel):
+                yield tok
+            return
+
+        # 2. Get contextual system prompt parts (full ReAct path below).
         profile_prompt = self.profile.get_system_prompt_addon()
         style_prompt = self.style_adapter.get_adapted_prompt_prefix()
 
@@ -87,8 +133,11 @@ class ReActAgent:
 
             if not call or call.tool == "none":
                 full_answer = ""
-                final_prompt = final_answer_prompt(full_system_prompt, scratch, rag, "\n".join(observations), user)
-                async for tok in self.llm.stream_async(final_prompt, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
+                sys_with_ctx = full_system_prompt
+                if scratch:
+                    sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
+                messages = build_answer_messages(sys_with_ctx, [], rag, "\n".join(observations), user)
+                async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
                     full_answer += tok
                     yield tok
                 self.mem.add_message(session_id, user, full_answer, context="\n".join(observations))
@@ -104,8 +153,14 @@ class ReActAgent:
                 break
             seen_actions.add(sig)
 
-            thought = call.rationale or "Planning next step."
-            yield f"\n---\n*Thinking:* {thought}\n*Action:* `{call.tool}` {call.args}\n---\n"
+            # The model's step reasoning (rationale) and the raw tool call are
+            # internal scratch-work, NOT part of the user-facing answer. They
+            # used to be streamed into the chat here, which glued a
+            # "Thinking:/Action:" block onto the front of the reply (visible on
+            # any tool-using turn). We deliberately do NOT yield them: the chat
+            # bubble should contain only the final answer. The tool still runs
+            # below, and the rationale/observations still feed the model via the
+            # scratchpad - the user just doesn't see the plumbing.
 
             obs = await self.tools.call(call.tool, call.args)
             observations.append(f"{call.tool} -> {obs[:800]}")
@@ -114,12 +169,39 @@ class ReActAgent:
         # Reached here by exhausting max_steps or by the loop guard above.
         # Stream the final answer using whatever observations were gathered.
         full_answer = ""
-        final_prompt = final_answer_prompt(full_system_prompt, scratch, rag, "\n".join(observations), user)
-        async for tok in self.llm.stream_async(final_prompt, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
+        sys_with_ctx = full_system_prompt
+        if scratch:
+            sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
+        messages = build_answer_messages(sys_with_ctx, [], rag, "\n".join(observations), user)
+        async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
             full_answer += tok
             yield tok
         self.mem.add_message(session_id, user, full_answer, context="\n".join(observations))
         await self._maybe_distill_facts(user, full_answer)
+
+    async def _fast_answer(self, session_id: str, user: str, cancel: asyncio.Event) -> AsyncGenerator[str, None]:
+        """Single-generation answer for simple messages. No routing, no RAG, no
+        distillation. Still records the turn so conversation history is intact."""
+        profile_prompt = self.profile.get_system_prompt_addon()
+        style_prompt = self.style_adapter.get_adapted_prompt_prefix()
+        full_system_prompt = f"{self.system_prompt} {profile_prompt} {style_prompt}".strip()
+        # Include only recent conversation for continuity; no RAG/observations.
+        scratch = self.mem.get_recent_context(session_id)
+        # Fold prior-conversation context into the system message; the current
+        # user message is a proper chat turn. Uses the model native chat
+        # template so it stops at its own end-of-turn token.
+        sys_with_ctx = full_system_prompt
+        if scratch:
+            sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
+        messages = build_answer_messages(sys_with_ctx, [], "", "", user)
+        full_answer = ""
+        async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
+            full_answer += tok
+            yield tok
+        self.mem.add_message(session_id, user, full_answer, context="")
+        # Deliberately NO _maybe_distill_facts here: the fast path is for simple
+        # chatter, and distillation is the extra per-turn model call we are
+        # avoiding. Fact extraction still runs on full-pipeline turns.
 
     async def _maybe_distill_facts(self, user: str, reply: str):
         # Skipping this saves one full LLM generation per chat turn.

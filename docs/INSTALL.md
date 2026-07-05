@@ -20,12 +20,14 @@ Aegis Synthesis is a sovereign, privacy-first AI assistant that runs entirely on
 ### Minimum
 - OS: Windows 10/11, macOS 10.15+, or Linux. The build script and prebuilt executable target Windows.
 - CPU: 4+ cores recommended.
-- RAM: 8 GB minimum (16 GB recommended).
+- RAM: 8 GB minimum (16 GB recommended). Only the model in use is held in memory (one at a time), so 8 GB is workable.
+- GPU: optional. The Windows build uses a GPU (AMD, NVIDIA, or Intel) automatically when present and falls back to CPU otherwise. No extra toolkit is needed beyond your normal graphics driver.
 - Disk: about 15 GB free (roughly 6 GB of models plus dependencies).
 - Python: 3.13. The build is pinned and tested against 3.13.12.
 
 ### Recommended
 - RAM: 16 GB or more for the large model.
+- A GPU for noticeably faster replies.
 - SSD for faster model loading.
 
 ---
@@ -117,7 +119,13 @@ python -c "import torch, gradio, llama_cpp, sentence_transformers; print('depend
 
 ## 3. Building a Standalone Executable (Windows)
 
-To produce a standalone Aegis.exe, run the build script from the project root:
+By default the Windows executable is built with GPU acceleration (Vulkan), so
+one exe uses whatever GPU is present and falls back to CPU. That build compiles
+llama-cpp-python from source and needs a one-time toolchain on the build
+machine; the full prerequisites and steps are in `docs/BUILD_GPU_BACKENDS.md`.
+A CPU-only fallback build is available with `BUILD_EXE.bat cpu` for machines
+without that toolchain. To produce a standalone Aegis.exe, run the build script
+from the project root:
 
 ```bat
 BUILD_EXE.bat
@@ -152,7 +160,7 @@ python -m src.main_gui
 Or run the built executable from the dist folder.
 
 What happens on first run:
-1. Model download (a few minutes): the default model (Llama-3.2-3B-Instruct-Q4_K_M.gguf, about 2 GB) downloads into the models folder.
+1. Model download (a few minutes): both models download into the models folder - the default (Llama-3.2-3B-Instruct-Q4_K_M.gguf, about 2 GB) and the large (Mistral-7B-Instruct-v0.3-Q4_K_M.gguf, about 4 GB), roughly 6 GB total. Only the active model is loaded into memory; the other stays on disk until you switch to it.
 2. Embedding model download (a minute or two): a small sentence-transformers model downloads.
 3. The server starts and your browser opens to http://127.0.0.1:7860.
 
@@ -160,10 +168,14 @@ If you have already placed the GGUF files in the models folder, no download happ
 
 ### Expected console messages (safe to ignore)
 ```
+ggml_vulkan: Found 1 Vulkan devices:
+[hardware] CPU threads: ... | RAM: ... | GPU: ... | llama backend: ...
+[ctx] GPU sizing by VRAM: ... => n_ctx=...
+[model:default] planned n_ctx=... n_gpu_layers=-1 (loads on first use)
 llama_new_context_with_model: n_ctx_per_seq (4096) < n_ctx_train (131072)
 Impersonate 'safari_15.3' does not exist, using 'random'
 ```
-The first is informational. The second comes from the search library's HTTP layer picking a browser profile and is harmless.
+The `ggml_vulkan`, `[hardware]`, `[ctx]`, and `[model:...]` lines report the detected hardware and how the context size was chosen; `n_gpu_layers=-1` means all layers were offloaded to the GPU (0 means CPU). The `n_ctx_per_seq` line is informational. The last line comes from the search library's HTTP layer picking a browser profile and is harmless.
 
 ---
 
@@ -194,7 +206,8 @@ Main chat area: the conversation, the message box, and the Send/Stop/Clear/Expor
 
 Right sidebar:
 - Suggestions: output from the proactive agents, with a "Use Last Suggestion" button. (Proactive agents are off by default; see below.)
-- Models: switch between "default" (faster) and "large" (more capable).
+- Models: switch between "default" (faster) and "large" (more capable). The dropdown shows the active model.
+- Web Access: turn on "Allow all sites" or edit the allowed-domains list. Changes save automatically.
 - Memory Inbox: approve facts before they are stored.
 - Collaboration Requests: for multi-device use; can be ignored on a single device.
 - Contacts and Identity: for secure peer-to-peer features.
@@ -207,7 +220,7 @@ Use Good, Bad, or Needs Correction under each response. Good and Bad record quic
 Aegis uses consent-based memory. During chat it may distill facts about you. Those appear in the Memory Inbox as pending. You must approve them before they are stored and used in future conversations.
 
 ### Proactive Agents
-Two background agents exist: Sentinel (clipboard and active-window suggestions) and Curator (periodic knowledge-base suggestions). They are disabled by default because they share the single CPU model with the chat and add latency.
+Two background agents exist: Sentinel (clipboard and active-window suggestions) and Curator (periodic knowledge-base suggestions). They are disabled by default because they run the model in the background alongside the chat and add latency. They use whichever model is currently active.
 
 To enable them, set proactive_enabled: true in config.yaml (and leave the AEGIS_PROACTIVE environment variable unset or not equal to 0).
 
@@ -225,7 +238,7 @@ AEGIS_PROACTIVE=0 python -m src.main_gui
 - default (Llama-3.2-3B): faster, lower RAM, good for most tasks.
 - large (Mistral-7B): more capable, higher RAM, better for complex tasks.
 
-Open the Models accordion, pick from the dropdown, and wait for the status to confirm the switch.
+Open the Models accordion and pick from the dropdown. The dropdown shows the active model. Only one model is resident at a time, so switching unloads the current model and loads the chosen one, which takes a few seconds on the first message after the switch. Your conversation carries over.
 
 ---
 
@@ -261,8 +274,8 @@ rm data/**/*.db-wal data/**/*.db-shm
 
 ### Slow responses
 - Switch to the default model.
-- Lower ctx_size for a model in config.yaml (for example 2048).
-- Set n_gpu_layers above 0 in config.yaml only if you have a supported GPU build.
+- Lower ctx_size for a model in config.yaml (for example 2048). Note the app auto-sizes context to your hardware; ctx_size acts as a floor.
+- The GPU build offloads to the GPU automatically when one is present. On a CPU-only machine, fewer threads are the main lever; there is no GPU to enable.
 
 ### Model did not download
 Models auto-download on first run. To place one manually, check the filename and URL in config.yaml, create the models folder if needed, and download into it:
@@ -332,8 +345,8 @@ models:
   - name: "default"
     path: "models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
     url: "https://huggingface.co/.../Llama-3.2-3B-Instruct-Q4_K_M.gguf?download=true"
-    ctx_size: 4096       # lower = faster, less context
-    n_gpu_layers: 0      # raise only with a GPU build
+    ctx_size: 4096       # floor; the app auto-sizes up to the hardware and model max
+    n_gpu_layers: 0      # 0 = auto (offload all layers when a usable GPU is present)
 ```
 
 Assistant:
@@ -343,7 +356,7 @@ assistant:
   tool_timeout_sec: 20
   allow_web_search: true
   proactive_enabled: false   # background agents off by default
-  distill_facts: true        # set false for fastest chat
+  distill_facts: false       # default off; the fast path never distills regardless
   quiet_hours: [23, 7]       # list: [start_hour, end_hour]
   suggestions_per_min: 5
   allow_domains:
@@ -352,7 +365,7 @@ assistant:
   allow_code_exec: false
 ```
 
-Thread count is chosen automatically from your CPU; it is not a per-model config key.
+Thread count is chosen automatically from your CPU; it is not a per-model config key. Context size and GPU offload are also chosen automatically from your hardware at startup (ctx_size is a floor; n_gpu_layers: 0 means auto). The startup console prints `[hardware]` and `[ctx]` lines showing what was detected and chosen.
 
 ---
 

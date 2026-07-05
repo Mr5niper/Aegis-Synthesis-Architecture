@@ -15,7 +15,10 @@ There are two ways to use Aegis:
 
 ## Features
 
-- Local LLM: Llama 3.2 3B or Mistral 7B (GGUF), switchable at runtime.
+- Local LLM: Llama 3.2 3B or Mistral 7B (GGUF), switchable at runtime. Only the
+  model in use is held in memory.
+- GPU-accelerated: the Windows build uses your GPU (AMD, NVIDIA, or Intel) when
+  present and falls back to the CPU when not, with nothing extra to install.
 - Private by design: conversations and data are stored locally on your PC.
 - RAG knowledge base with semantic search, and a consent-based memory system
   that asks before saving facts about you.
@@ -46,8 +49,12 @@ side by side in the extracted folder; just leave them that way.
 ## Requirements
 
 - Windows 10 or 11 (64-bit).
-- 16 GB of RAM recommended. Aegis loads both of its AI models at startup, so
-  8 GB will be tight.
+- 16 GB of RAM recommended. Aegis keeps only the model you are using in memory
+  (it loads one at a time), so 8 GB can work, though more is better for the
+  large model.
+- A GPU (AMD, NVIDIA, or Intel) is optional but makes replies much faster. The
+  app uses it automatically when present; nothing beyond your normal graphics
+  driver is needed. With no usable GPU it runs on the CPU.
 - About 10 GB of free disk space. On first run the app downloads two AI models
   (about 6 GB total) plus a small text-processing model, and stores them next
   to the exe.
@@ -124,8 +131,9 @@ between them in the **Models** panel on the right:
 - **large** (Mistral 7B): more capable but heavier and slower, and uses more
   RAM.
 
-Both models are already on disk after the first run, so switching does not
-download anything.
+Both models are downloaded on the first run, so switching does not download
+anything. Only one model is loaded at a time: switching unloads the current one
+and loads the other, which takes a few seconds. Your conversation carries over.
 
 ## Changing settings
 
@@ -138,8 +146,9 @@ You do not need to touch this file to use Aegis; the defaults work out of the bo
 
 ## Privacy
 
-Everything runs locally. The AI model runs on your CPU, your conversations are
-stored only in the `data` folder on your PC, and nothing is sent to any company.
+Everything runs locally. The AI model runs on your own machine (on your GPU when
+there is a usable one, otherwise on your CPU), your conversations are stored only
+in the `data` folder on your PC, and nothing is sent to any company.
 The only time Aegis reaches the internet on its own is:
 
 - the one-time model download on first run, and
@@ -168,7 +177,8 @@ download, you can place the model file manually: create a `models` folder next t
 are in `config.yaml`).
 
 **Replies are slow.**
-The model runs on your CPU, so speed depends on your hardware. Use the **default**
+Speed depends on your hardware. Aegis uses your GPU automatically when it can; on
+a CPU-only machine the model runs on the CPU, which is slower. Use the **default**
 model rather than **large**, and close other heavy programs.
 
 **Windows blocked it (SmartScreen).**

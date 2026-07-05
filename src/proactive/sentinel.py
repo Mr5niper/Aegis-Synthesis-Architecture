@@ -8,15 +8,16 @@ try: import pygetwindow as gw
 except Exception: gw = None
 from ..core.event_bus import EventBus
 from ..core.policy import PolicyManager
-from ..core.llm_async import AsyncLocalLLM
+from ..core.model_manager import ModelManager
 
 class Sentinel:
-    def __init__(self, llm: AsyncLocalLLM, bus: EventBus, policy: PolicyManager, poll_sec: int = 3):
-        self.llm, self.bus, self.policy, self.poll_sec = llm, bus, policy, poll_sec
+    def __init__(self, manager: ModelManager, bus: EventBus, policy: PolicyManager, poll_sec: int = 3):
+        # Holds the ModelManager, NOT a fixed llm. With lazy one-at-a-time model
+        # loading, the resident model can change (or be temporarily unloaded), so
+        # we fetch the active model from the manager right before each call. That
+        # also means a model swap is safe: the manager serializes swap vs. use.
+        self.manager, self.bus, self.policy, self.poll_sec = manager, bus, policy, poll_sec
         self._last_clip, self._last_title = "", ""
-
-    def set_llm(self, llm: AsyncLocalLLM):
-        self.llm = llm
 
     def _get_context(self) -> tuple[str, str]:
         clip = pyperclip.paste() if pyperclip else ""
@@ -26,7 +27,9 @@ class Sentinel:
     async def _suggest(self, clip: str, title: str) -> Optional[str]:
         prompt = (f"System: You are a proactive assistant. Based on the clipboard and window title, suggest one highly relevant action in a single sentence. "
                   f"Examples: 'Summarize the copied text.' or 'Search docs for: pandas read_csv'.\n\nClipboard: {clip[:500]}\nActive Window: {title[:200]}\n\nSuggestion:")
-        try: return (await self.llm.generate_async(prompt, 64, 0.4)).strip()
+        try:
+            llm = await self.manager.get_active()
+            return (await llm.generate_async(prompt, 64, 0.4)).strip()
         except Exception: return None
 
     async def run(self):

@@ -54,6 +54,12 @@ LLAMA_VERSION = "0.3.2"             # pinned; matches the cp313 CPU wheel set
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 # llama-cpp-python prebuilt CPU wheels (maintained by the upstream author).
 LLAMA_CPU_INDEX = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
+# Source distribution of the pinned llama-cpp-python, used for the opt-in GPU
+# build (compiled from source with a GPU backend). Same version as the CPU path.
+LLAMA_SDIST_URL = (
+    "https://files.pythonhosted.org/packages/source/l/llama-cpp-python/"
+    "llama_cpp_python-%s.tar.gz" % LLAMA_VERSION
+)
 
 ROOT = Path(__file__).resolve().parent
 VENV_DIR = ROOT / "venv"
@@ -108,7 +114,87 @@ def pip_install(py: Path, args, extra_env=None):
     run([str(py), "-m", "pip", "install"] + args, env=env)
 
 
-def install_dependencies(py: Path):
+def _default_gpu_backend() -> str:
+    """Pick the GPU backend that matches this OS.
+
+    Linux and Windows use Vulkan (cross-vendor: AMD/NVIDIA/Intel). macOS has no
+    Vulkan; Apple GPUs use Metal, which is the correct llama.cpp GPU backend
+    there. Returns the CMake flag fragment for the backend, or "" if unknown.
+    """
+    if sys.platform == "darwin":
+        return "-DGGML_METAL=on"
+    # Linux and Windows
+    return "-DGGML_VULKAN=on"
+
+
+def install_llama_gpu_from_source(py: Path):
+    """Compile and install llama-cpp-python with a GPU backend from source.
+
+    This mirrors the Windows Vulkan path in BUILD_EXE.bat: download the pinned
+    source, add a missing #include <chrono> to two vendor C++ files (needed on
+    newer toolchains; llama.cpp issue 11834), and build with the GPU backend and
+    without the unused llava vision example.
+
+    Backend: Vulkan on Linux, Metal on macOS. This is UNTESTED by the maintainer
+    on both platforms and needs a working C/C++ toolchain plus, on Linux, the
+    Vulkan SDK/headers. On any failure the caller falls back to the CPU wheel.
+
+    Requires: a C/C++ compiler and CMake on PATH. On Linux also the Vulkan SDK
+    or distro packages (libvulkan-dev, glslang/shaderc). See
+    BUILD_CROSS_PLATFORM.md for the per-distro package names.
+    """
+    import tarfile
+    import urllib.request
+
+    backend_flag = _default_gpu_backend()
+    backend_name = "Metal" if sys.platform == "darwin" else "Vulkan"
+    step("Installing llama-cpp-python==%s from source (%s GPU backend)" % (LLAMA_VERSION, backend_name))
+    info("This is the slow part and is UNTESTED on this platform; CPU fallback applies if it fails.")
+
+    work = ROOT / "_lcpb"
+    if work.exists():
+        shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True, exist_ok=True)
+    sdist = work / ("llama_cpp_python-%s.tar.gz" % LLAMA_VERSION)
+
+    info("Downloading source: %s" % LLAMA_SDIST_URL)
+    urllib.request.urlretrieve(LLAMA_SDIST_URL, sdist)
+
+    # Unpack, skipping the vendor spm-headers symlinks (Swift Package Manager
+    # only; they can break extraction on some systems and are unused here).
+    def _safe(members):
+        for m in members:
+            if "/spm-headers/" in m.name or m.name.endswith("/spm-headers"):
+                continue
+            yield m
+    with tarfile.open(sdist, "r:gz") as tf:
+        tf.extractall(work, members=_safe(tf.getmembers()))
+
+    srcs = [p for p in work.iterdir() if p.is_dir() and p.name.startswith("llama_cpp_python-")]
+    if not srcs:
+        raise RuntimeError("could not find unpacked llama-cpp-python source")
+    src = srcs[0]
+
+    # Add #include <chrono> to the two vendor files that assume it transitively.
+    for rel in ("vendor/llama.cpp/common/common.cpp", "vendor/llama.cpp/common/log.cpp"):
+        f = src / rel
+        if f.exists():
+            text = f.read_text(encoding="utf-8", errors="ignore")
+            if "#include <chrono>" not in text:
+                f.write_text("#include <chrono>\n" + text, encoding="utf-8")
+                info("patched %s" % rel)
+
+    # Build the patched local source with the GPU backend and no llava.
+    env = dict(os.environ)
+    env["CMAKE_ARGS"] = "%s -DLLAVA_BUILD=OFF" % backend_flag
+    info("CMAKE_ARGS=%s" % env["CMAKE_ARGS"])
+    run([str(py), "-m", "pip", "install", "--no-cache-dir",
+         "--no-binary", "llama-cpp-python", str(src)], env=env)
+
+    shutil.rmtree(work, ignore_errors=True)
+
+
+def install_dependencies(py: Path, gpu: bool = False):
     step("Upgrading pip / wheel and pinning setuptools")
     pip_install(py, ["--upgrade", "pip", "wheel"])
     pip_install(py, ["setuptools<82"])
@@ -118,7 +204,34 @@ def install_dependencies(py: Path):
     # the default PyPI torch wheel is already arm64; the CPU index is still fine.
     pip_install(py, ["--no-cache-dir", "torch", "--index-url", TORCH_CPU_INDEX])
 
-    step("Installing llama-cpp-python==%s (prebuilt wheel, no compiler)" % LLAMA_VERSION)
+    if gpu:
+        # Opt-in GPU build: compile llama-cpp-python from source with Vulkan
+        # (Linux) or Metal (macOS). Untested; on ANY failure fall back to the
+        # prebuilt CPU wheel so the build still produces a working program.
+        try:
+            install_llama_gpu_from_source(py)
+        except Exception as e:
+            warn("GPU build of llama-cpp-python failed: %s" % e)
+            warn("Falling back to the prebuilt CPU wheel. The program will run,")
+            warn("on the CPU only. See BUILD_CROSS_PLATFORM.md to fix the GPU build.")
+            _install_llama_cpu(py)
+    else:
+        _install_llama_cpu(py)
+
+    step("Installing remaining dependencies from requirements.txt")
+    # --only-binary :all: forbids ANY source build of C-extension packages, so a
+    # missing wheel fails fast instead of invoking a compiler. pygetwindow and
+    # pyrect are pure-Python sdists with no wheel, so they are allowed to build
+    # from sdist (a plain copy, no compiler) via --no-binary.
+    pip_install(py, [
+        "--no-cache-dir", "--only-binary", ":all:",
+        "--no-binary", "pygetwindow,pyrect",
+        "-r", "requirements.txt",
+    ])
+
+
+def _install_llama_cpu(py: Path):
+    step("Installing llama-cpp-python==%s (prebuilt CPU wheel, no compiler)" % LLAMA_VERSION)
     # --only-binary forbids a from-source build. If no wheel exists for this
     # OS/Python/arch, this fails fast with a clear message rather than trying
     # to invoke a C compiler. See BUILD_CROSS_PLATFORM.md for alternatives.
@@ -133,17 +246,6 @@ def install_dependencies(py: Path):
         warn("llama-cpp-python from source (needs a C/C++ compiler + CMake).")
         warn("See BUILD_CROSS_PLATFORM.md.")
         raise
-
-    step("Installing remaining dependencies from requirements.txt")
-    # --only-binary :all: forbids ANY source build of C-extension packages, so a
-    # missing wheel fails fast instead of invoking a compiler. pygetwindow and
-    # pyrect are pure-Python sdists with no wheel, so they are allowed to build
-    # from sdist (a plain copy, no compiler) via --no-binary.
-    pip_install(py, [
-        "--no-cache-dir", "--only-binary", ":all:",
-        "--no-binary", "pygetwindow,pyrect",
-        "-r", "requirements.txt",
-    ])
 
 
 def ensure_packages_and_folders():
@@ -205,7 +307,15 @@ def main():
     ap.add_argument("--deps-only", action="store_true", help="Install dependencies, do not build.")
     ap.add_argument("--build-only", action="store_true",
                     help="Build only; assumes dependencies are already installed.")
+    ap.add_argument("--gpu", action="store_true",
+                    help="Opt-in: compile llama-cpp-python with a GPU backend "
+                         "(Vulkan on Linux, Metal on macOS) instead of the CPU "
+                         "wheel. Needs a C/C++ toolchain + CMake (and the Vulkan "
+                         "SDK on Linux). UNTESTED; falls back to CPU on failure.")
     args = ap.parse_args()
+
+    # Allow AEGIS_GPU=1 as an alternative to the flag.
+    gpu = args.gpu or os.environ.get("AEGIS_GPU", "").strip() not in ("", "0")
 
     os.chdir(ROOT)
     check_python_version()
@@ -220,7 +330,7 @@ def main():
             fail("venv python not found at %s" % py)
 
     if not args.build_only:
-        install_dependencies(py)
+        install_dependencies(py, gpu=gpu)
         ensure_packages_and_folders()
 
     if args.deps_only:
