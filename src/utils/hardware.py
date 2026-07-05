@@ -182,14 +182,22 @@ def detect_hardware() -> HardwareProfile:
     )
 
 
-def plan_model_params(hw: HardwareProfile, requested_ctx: int, n_gpu_layers_cfg: int) -> dict:
+def plan_model_params(hw: HardwareProfile, requested_ctx: int, n_gpu_layers_cfg: int,
+                      ctx_train_max: int = 0) -> dict:
     """Turn a hardware profile into concrete llama.cpp params.
 
     - n_gpu_layers: if config forces a value (>0 or -1) and a GPU backend is
       usable, respect it. If config is 0 (auto) and a usable GPU exists, offload
       all layers (-1). Otherwise 0 (CPU).
-    - n_ctx: keep the model's requested context, but clamp down on low-RAM
-      machines so we do not thrash or OOM.
+    - n_ctx: auto-scaled to the machine. The config ctx_size is treated as a
+      BASELINE/floor: weak machines are clamped DOWN so they do not thrash or
+      OOM, and capable machines are scaled UP for a bigger context window.
+      Scaling is keyed off system RAM (reliably detected on every platform,
+      unlike VRAM which we cannot read for AMD/Intel). The result is never
+      allowed to exceed ctx_train_max (the context length the model was
+      actually trained for) when that is provided; going past it degrades
+      output quality. When ctx_train_max is 0/unknown we do not scale above
+      the requested baseline, to stay safe.
     - n_threads: from CPU detection.
     """
     # GPU layers
@@ -200,14 +208,48 @@ def plan_model_params(hw: HardwareProfile, requested_ctx: int, n_gpu_layers_cfg:
     else:
         n_gpu_layers = -1  # auto: offload everything to the usable GPU
 
-    # Context clamp by RAM (CPU inference holds the KV cache in RAM).
-    n_ctx = requested_ctx
-    if not hw.has_usable_gpu:
-        if hw.total_ram_gb <= 8:
-            n_ctx = min(requested_ctx, 2048)
-        elif hw.total_ram_gb <= 16:
-            n_ctx = min(requested_ctx, 4096)
-        # >16 GB: honor whatever the model requested.
+    # Context sizing, scaled to the machine by system RAM. RAM is used as the
+    # capability signal because it is detected reliably on every OS, whereas
+    # VRAM is only readable for NVIDIA here (AMD/Intel report 0). Bigger RAM
+    # strongly correlates with a more capable box (and, on GPU builds, a
+    # bigger card), so it is a safe proxy for "how much context can this PC
+    # comfortably hold". The KV cache grows with context length; it lives in
+    # VRAM on a GPU offload build and in RAM on a CPU build, so on a weak
+    # machine we must clamp DOWN, and on a strong one we can open it UP.
+    #
+    # ceiling is the largest context we will hand this tier. The final value
+    # is max(baseline, ceiling) so a user who hand-sets a large ctx_size in
+    # config is never REDUCED below their request on a capable machine, only
+    # raised - and then everything is capped by the model's trained max.
+    ram = hw.total_ram_gb
+    if ram <= 8:
+        ceiling = 4096
+    elif ram <= 16:
+        ceiling = 8192
+    elif ram <= 32:
+        ceiling = 16384
+    elif ram <= 64:
+        ceiling = 32768
+    else:
+        ceiling = 65536
+
+    # On a CPU-only build the KV cache sits in RAM and every token is computed
+    # on the CPU, so a huge window both eats memory and slows each turn. Keep
+    # the low tiers conservative by not letting CPU-only machines use the very
+    # top of the range (halve the ceiling above the 16 GB tier, floor 8192).
+    if not hw.has_usable_gpu and ceiling > 8192:
+        ceiling = max(8192, ceiling // 2)
+
+    # Baseline from config is a floor: never go below what the user asked for.
+    n_ctx = max(requested_ctx, ceiling)
+
+    # Never exceed the model's trained context length when we know it; going
+    # past it produces degraded output. When unknown (0), do not scale above
+    # the requested baseline to stay safe.
+    if ctx_train_max and ctx_train_max > 0:
+        n_ctx = min(n_ctx, ctx_train_max)
+    elif requested_ctx:
+        n_ctx = min(n_ctx, requested_ctx)
 
     return {
         "n_ctx": n_ctx,

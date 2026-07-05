@@ -199,7 +199,25 @@ def main():
     print(f"[hardware] {describe_hw(hw)}")
 
     model_manager = ModelManager()
-    
+
+    # Each GGUF model was trained for a maximum context length; using more than
+    # this degrades output. llama.cpp reports it at load as n_ctx_train, but we
+    # need it BEFORE load to size n_ctx, so we keep a small known-values table
+    # keyed by a substring of the model file/name. Anything not listed falls
+    # back to 0 = unknown, which makes plan_model_params stay at the configured
+    # baseline (no upward scaling) to stay safe. Update this if models change.
+    CTX_TRAIN_MAX = {
+        "llama-3.2": 131072,   # Llama-3.2-3B-Instruct: 128K trained context
+        "mistral-7b": 32768,   # Mistral-7B-Instruct-v0.3: 32K trained context
+    }
+
+    def _ctx_train_max_for(mc) -> int:
+        hay = (mc.path + " " + mc.name).lower()
+        for key, val in CTX_TRAIN_MAX.items():
+            if key in hay:
+                return val
+        return 0
+
     # 1. Load Models and Download
     for model_cfg_data in cfg.models:
         model_cfg = ModelConfig(**model_cfg_data)
@@ -211,7 +229,8 @@ def main():
         # Plan params from detected hardware. Config still has the final say:
         # a non-zero n_gpu_layers in config is treated as an explicit override;
         # 0 means 'auto' (offload all layers if a usable GPU backend exists).
-        params = plan_model_params(hw, model_cfg.ctx_size, model_cfg.n_gpu_layers)
+        params = plan_model_params(hw, model_cfg.ctx_size, model_cfg.n_gpu_layers,
+                                    ctx_train_max=_ctx_train_max_for(model_cfg))
         print(f"[model:{model_cfg.name}] n_ctx={params['n_ctx']} "
               f"n_threads={params['n_threads']} n_gpu_layers={params['n_gpu_layers']}")
         llm_instance = AsyncLocalLLM(
