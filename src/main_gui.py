@@ -268,6 +268,7 @@ def main():
         allow_web_search=cfg.assistant.allow_web_search,
         proactive_enabled=proactive_enabled,
         allow_domains=cfg.assistant.allow_domains,
+        allow_all_web=cfg.assistant.allow_all_web,
         quiet_hours=cfg.assistant.quiet_hours,
         suggestions_per_min=cfg.assistant.suggestions_per_min,
     )

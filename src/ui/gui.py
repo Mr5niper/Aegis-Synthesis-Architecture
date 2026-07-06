@@ -82,30 +82,26 @@ def mount_training_viewer(root_blocks: gr.Blocks, trainer: LoRATrainer):
         refresh_btn.click(update_status, outputs=[status_text, script_text])
         root_blocks.load(update_status, outputs=[status_text, script_text])      
 def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
-    """Panel to view/edit which web domains the assistant may fetch.
+    """Panel to view/edit web access.
 
-    Two modes:
-      - Allow all sites: represented internally as an EMPTY allow list, which
-        the policy and fetch layer treat as "no restriction".
-      - Restrict to a list: only the listed domains (and their subdomains) may
-        be fetched.
+    The checkbox is the MASTER SWITCH:
+      - Checked  -> allow all sites. The domain box is greyed out (disabled) but
+        keeps showing the saved list so it returns when you uncheck.
+      - Unchecked -> restrict to the domain list. The box is editable.
 
-    Settings apply and save the moment they change; there is no Save button and
-    no status box. The domains textbox is the source of truth for the list and
-    is never cleared by toggling Allow-all: turning Allow-all on only disables
-    the box (its text is kept), and turning it off re-enables the same list.
-    (Internally, Allow-all is stored as an empty list in config.yaml, but the
-    box keeps showing your domains so they return intact when you switch back.)
+    The mode is decided solely by the checkbox (cfg.assistant.allow_all_web),
+    independent of what the list contains. Changes save immediately; a failed
+    save is printed to the console instead of being silently swallowed.
     """
     current = list(cfg.assistant.allow_domains or [])
-    start_allow_all = len(current) == 0
+    start_allow_all = bool(cfg.assistant.allow_all_web)
 
     with gr.Accordion("Web Access", open=False):
         gr.Markdown(
             "Control which websites Aegis may open when it searches or fetches a "
-            "page. Turn on **Allow all sites** for unrestricted access, or leave "
-            "it off and list the allowed domains (one per line, e.g. `github.com`). "
-            "Subdomains are included automatically. Changes save automatically."
+            "page. Turn on **Allow all sites** to let it open any site. Turn it "
+            "off to restrict it to the domains you list below (one per line, e.g. "
+            "`github.com`; subdomains are included). Changes save automatically."
         )
         allow_all_cb = gr.Checkbox(
             label="Allow all sites (no domain restriction)",
@@ -119,33 +115,29 @@ def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
             interactive=not start_allow_all,
         )
 
-        # Persisting helper. Always saves the CURRENT textbox contents as the
-        # list, regardless of the Allow-all state, so the list is never lost.
-        # When Allow-all is on, update_web_access stores an empty list in config
-        # (its representation of "allow any"), but we leave the textbox text
-        # untouched so the domains reappear the moment Allow-all is turned off.
+        # Persist helper. Saves the checkbox state (the mode) and the CURRENT
+        # textbox contents (always, so the list is never lost). Any failure is
+        # printed, not swallowed, so a broken save is visible in the console.
         def _persist(is_all, text):
             try:
-                update_web_access(cfg, policy, bool(is_all), (text or "").splitlines())
-            except Exception:
-                # Saving should not break the UI; a failed write leaves the
-                # in-memory setting applied and the file unchanged.
-                pass
+                saved_to = update_web_access(
+                    cfg, policy, bool(is_all), (text or "").splitlines())
+                print(f"[web_access] saved: allow_all={bool(is_all)} "
+                      f"domains={cfg.assistant.allow_domains} -> {saved_to}")
+            except Exception as e:  # noqa: BLE001
+                print(f"[web_access] SAVE FAILED: {type(e).__name__}: {e}")
 
-        # Toggling Allow-all: save immediately and enable/disable the list box
-        # WITHOUT changing its text (gr.update with no value leaves text as-is).
+        # Toggling the checkbox sets the mode: save, then grey/ungrey the box
+        # (its text is left as-is so the list is preserved).
         def _on_toggle(is_all, text):
             _persist(is_all, text)
-            return gr.update(interactive=not is_all)
+            return gr.update(interactive=not bool(is_all))
         allow_all_cb.change(
             _on_toggle, inputs=[allow_all_cb, domains_box], outputs=[domains_box],
             queue=False,
         )
 
-        # Editing the list: save when focus leaves the box (blur) and on submit,
-        # rather than on every keystroke, so config.yaml is not rewritten on each
-        # character. Only meaningful when Allow-all is off, but saving while it is
-        # on is harmless (the list is stored empty either way).
+        # Editing the list saves on blur / submit (not each keystroke).
         def _on_domains(is_all, text):
             _persist(is_all, text)
         domains_box.blur(_on_domains, inputs=[allow_all_cb, domains_box], outputs=None, queue=False)

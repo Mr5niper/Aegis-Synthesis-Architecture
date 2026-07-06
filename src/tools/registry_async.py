@@ -57,10 +57,10 @@ class AsyncToolRegistry:
     WEB_TOOLS = ("search_web", "research_web", "fetch_url", "ingest_url")
 
     def web_open(self) -> bool:
-        """True when 'Allow all sites' is on (the allow-domains list is empty),
-        meaning web tools may read any page without asking. When False, the
-        agent asks for one-time consent and only allowlisted domains are read."""
-        return not bool(self.cfg.assistant.allow_domains)
+        """True when the 'Allow all sites' master switch is on, meaning web
+        tools may read any page without asking. When False, only the domains in
+        allow_domains are readable and the agent asks one-time consent."""
+        return bool(self.cfg.assistant.allow_all_web)
 
     def consent_warning(self) -> str:
         """The message shown once per session before the first web search when
@@ -152,7 +152,8 @@ class AsyncToolRegistry:
                     page = cached
                 else:
                     page = await loop.run_in_executor(
-                        None, fetch_text, url, "Aegis/1.0", self.cfg.assistant.allow_domains)
+                        None, fetch_text, url, "Aegis/1.0", self.cfg.assistant.allow_domains,
+                        9000, self.cfg.assistant.allow_all_web)
                     if page and not page.startswith("[Blocked") and not page.startswith("[Error"):
                         self.cache.put(url, page)
             if page.startswith("[Blocked") or page.startswith("[Error"):
@@ -173,7 +174,7 @@ class AsyncToolRegistry:
         url = str(a.get("url",""))
         if cached := self.cache.get(url):
             return cached
-        text = await asyncio.get_event_loop().run_in_executor(None, fetch_text, url, "Aegis/1.0", self.cfg.assistant.allow_domains)
+        text = await asyncio.get_event_loop().run_in_executor(None, fetch_text, url, "Aegis/1.0", self.cfg.assistant.allow_domains, 9000, self.cfg.assistant.allow_all_web)
         self.cache.put(url, text)
         return text
 

@@ -12,6 +12,12 @@ class AssistantConfig(BaseModel):
     tool_timeout_sec: int = 20; proactive_enabled: bool = True
     quiet_hours: Tuple[int, int] = (23, 7); suggestions_per_min: int = 5
     allow_domains: List[str] = Field(default_factory=list)
+    # Master switch for web reading. When True, the assistant may open ANY site
+    # and the allow_domains list is ignored (but preserved for when this is
+    # turned back off). When False, only allow_domains (and subdomains) may be
+    # opened. This is the checkbox in the Web Access panel; it is the single
+    # thing that decides the mode, independent of what the domain list contains.
+    allow_all_web: bool = False
     distill_facts: bool = False  # run a fact-extraction generation after each full-pipeline turn; off by default to save one model call per message (the fast path never distills regardless)
     allow_code_exec: bool = False
 
@@ -85,18 +91,29 @@ def save_config(cfg: AppConfig, path: str = "config.yaml") -> str:
 def update_web_access(cfg: AppConfig, policy, allow_all: bool, domains: List[str], path: str = "config.yaml") -> str:
     """Apply web-access settings live and persist them.
 
-    allow_all=True is represented as an EMPTY allow_domains list, which both the
-    policy and the fetch layer already treat as "allow any domain". Otherwise the
-    provided domain list is used. The list is mutated IN PLACE on cfg so the
-    already-constructed tool registry (which reads cfg.assistant.allow_domains at
-    call time) sees the change immediately, and the policy copy is updated too.
-    Returns the saved file path.
+    allow_all is the MASTER SWITCH (the Web Access checkbox):
+      - True  -> the assistant may open any site; the domain list is ignored but
+                 still saved so it returns intact when allow_all is turned off.
+      - False -> only the domains in the list (and their subdomains) may open.
+
+    The domain list is ALWAYS saved as given, regardless of allow_all, so it is
+    never lost. Values are mutated IN PLACE on cfg so the already-constructed
+    tool registry (which reads cfg.assistant at call time) sees the change
+    immediately, and the policy copy is updated too. Returns the saved path.
     """
-    cleaned = [] if allow_all else _clean_domains(domains)
+    cleaned = _clean_domains(domains)
     # Mutate in place (do not rebind) so shared references stay valid.
+    cfg.assistant.allow_all_web = bool(allow_all)
     cfg.assistant.allow_domains[:] = cleaned
     if policy is not None:
-        policy.allow_domains = cleaned
+        # Keep the policy in sync. When allow_all is on, the effective allow list
+        # is "any" (empty); otherwise it is the cleaned list. The fetch layer
+        # also checks allow_all_web directly, so this is belt-and-suspenders.
+        policy.allow_domains = [] if allow_all else cleaned
+        try:
+            policy.allow_all_web = bool(allow_all)
+        except Exception:
+            pass
     return save_config(cfg, path)
 
 def _clean_domains(domains: List[str]) -> List[str]:
