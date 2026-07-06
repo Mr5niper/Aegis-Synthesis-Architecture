@@ -243,16 +243,16 @@ if errorlevel 1 (
     goto :error
 )
 
-:: 5c. Patch the two C++ files that are missing #include <chrono>. Idempotent:
-::     only prepends the include if it is not already the first line. Uses
-::     PowerShell (always present) so we do not depend on sed/awk on Windows.
+:: 5c. Patch the two C++ files that are missing #include <chrono>. This calls
+::     a small Python helper (scripts\patch_chrono.py) using the venv Python
+::     that is already active here. Doing it in Python rather than a PowerShell
+::     loop avoids spinning up PowerShell/.NET, reads and writes each file once,
+::     and is idempotent (it skips a file that already has the include).
 echo [INFO]   Patching common.cpp and log.cpp with #include ^<chrono^> ...
-for %%F in (common.cpp log.cpp) do (
-    powershell -NoProfile -Command "$f = Join-Path '%LCP_SRC%' 'vendor\llama.cpp\common\%%F'; $c = Get-Content -LiteralPath $f -Raw; if ($c -notmatch '#include <chrono>') { Set-Content -LiteralPath $f -Value ('#include <chrono>' + [Environment]::NewLine + $c) -NoNewline }"
-    if errorlevel 1 (
-        echo [ERROR] Failed to patch %%F with the chrono include.
-        goto :error
-    )
+python "%~dp0scripts\patch_chrono.py" "%LCP_SRC%"
+if errorlevel 1 (
+    echo [ERROR] Failed to patch the C++ source files with the chrono include.
+    goto :error
 )
 
 :: 5d. Build+install the PATCHED local source. -DGGML_VULKAN=on enables the
