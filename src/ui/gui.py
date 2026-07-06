@@ -13,7 +13,7 @@ from .consent import ConsentBroker
 from ..learning.lora_trainer import LoRATrainer
 from ..learning.style_adapter import StyleAdapter
 from ..__version__ import get_version_info # Added for versioning
-from ..core.config import update_web_access, AppConfig
+from ..core.config import update_web_access, update_search_provider, AppConfig
 AUDIT_FILE = Path("data/user_data/inbox_approved.jsonl")
 def _inbox_choices(inbox: MemoryInbox):
     return [(f"{s} {r} {d}", i) for i, s, r, d in inbox.list_pending()]
@@ -142,6 +142,57 @@ def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
             _persist(is_all, text)
         domains_box.blur(_on_domains, inputs=[allow_all_cb, domains_box], outputs=None, queue=False)
         domains_box.submit(_on_domains, inputs=[allow_all_cb, domains_box], outputs=None, queue=False)
+
+        # ---- Search provider (below the master switch) --------------------
+        # Which backend research_web uses. Exactly one at a time (radio). To add
+        # another provider later: implement it in search.py, allow its value in
+        # config.update_search_provider, and add a choice to this radio.
+        _prov_label = {"duckduckgo": "DuckDuckGo", "tavily": "Tavily"}
+        start_provider = _prov_label.get(
+            (cfg.assistant.search_provider or "duckduckgo").lower(), "DuckDuckGo")
+        gr.Markdown("**Search provider** (used when Aegis searches; pick one)")
+        provider_radio = gr.Radio(
+            choices=["DuckDuckGo", "Tavily"],
+            value=start_provider,
+            show_label=False,
+        )
+        gr.Markdown(
+            "DuckDuckGo: no key, often rate-limited. "
+            "Tavily: free key at tavily.com (~1000/mo, no card), best for AI."
+        )
+        tavily_key_box = gr.Textbox(
+            label="Tavily API key",
+            value=cfg.assistant.tavily_api_key or "",
+            type="password",
+            placeholder="tvly-...",
+            interactive=True,
+            visible=(start_provider == "Tavily"),
+        )
+
+        # Save provider + key together; a failure is printed, not swallowed.
+        def _save_provider(prov_label, key):
+            prov = "tavily" if prov_label == "Tavily" else "duckduckgo"
+            try:
+                saved_to = update_search_provider(cfg, prov, key or "")
+                print(f"[web_access] saved: search_provider={prov} "
+                      f"tavily_key={'set' if (key or '').strip() else 'empty'} "
+                      f"-> {saved_to}")
+            except Exception as e:  # noqa: BLE001
+                print(f"[web_access] SAVE FAILED (provider): {type(e).__name__}: {e}")
+
+        # Switching provider saves and shows the key box only for Tavily.
+        def _on_provider(prov_label, key):
+            _save_provider(prov_label, key)
+            return gr.update(visible=(prov_label == "Tavily"))
+        provider_radio.change(
+            _on_provider, inputs=[provider_radio, tavily_key_box],
+            outputs=[tavily_key_box], queue=False)
+
+        # Save the key on blur / submit (not each keystroke).
+        def _on_key(prov_label, key):
+            _save_provider(prov_label, key)
+        tavily_key_box.blur(_on_key, inputs=[provider_radio, tavily_key_box], outputs=None, queue=False)
+        tavily_key_box.submit(_on_key, inputs=[provider_radio, tavily_key_box], outputs=None, queue=False)
 
 def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contacts, kairos, inbox: MemoryInbox, graph: LWWGraph, sync_service: SyncService, broker: ConsentBroker = None, identity=None, trainer: LoRATrainer = None, style_adapter: StyleAdapter = None, model_names: list[str] = None, on_switch_model=None, cfg=None, policy=None):
     

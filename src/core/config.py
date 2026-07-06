@@ -18,6 +18,16 @@ class AssistantConfig(BaseModel):
     # opened. This is the checkbox in the Web Access panel; it is the single
     # thing that decides the mode, independent of what the domain list contains.
     allow_all_web: bool = False
+    # Which search backend research_web uses. "duckduckgo" is keyless (works out
+    # of the box but is often rate-limited); "tavily" uses the Tavily API and
+    # needs tavily_api_key set. Only one is active at a time (chosen in the Web
+    # Access panel). New providers can be added by extending search.py and this
+    # value; nothing else in the flow changes.
+    search_provider: str = "duckduckgo"
+    # API key for Tavily (https://tavily.com), used only when search_provider is
+    # "tavily". Free tier ~1000 searches/month, no credit card. Leave blank to
+    # use DuckDuckGo instead.
+    tavily_api_key: str = ""
     distill_facts: bool = False  # run a fact-extraction generation after each full-pipeline turn; off by default to save one model call per message (the fast path never distills regardless)
     allow_code_exec: bool = False
 
@@ -114,6 +124,22 @@ def update_web_access(cfg: AppConfig, policy, allow_all: bool, domains: List[str
             policy.allow_all_web = bool(allow_all)
         except Exception:
             pass
+    return save_config(cfg, path)
+
+def update_search_provider(cfg: AppConfig, provider: str, tavily_api_key: str, path: str = "config.yaml") -> str:
+    """Apply and persist the search-provider choice and Tavily key.
+
+    provider is normalized to a known value ("duckduckgo" or "tavily"); anything
+    unrecognized falls back to "duckduckgo" so the app always has a working
+    keyless default. The Tavily key is trimmed. Values are set in place on cfg so
+    the already-constructed tool registry (which reads cfg.assistant at call
+    time) picks up the change immediately. Returns the saved path.
+    """
+    p = (provider or "").strip().lower()
+    if p not in ("duckduckgo", "tavily"):
+        p = "duckduckgo"
+    cfg.assistant.search_provider = p
+    cfg.assistant.tavily_api_key = (tavily_api_key or "").strip()
     return save_config(cfg, path)
 
 def _clean_domains(domains: List[str]) -> List[str]:

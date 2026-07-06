@@ -140,33 +140,34 @@ class ReActAgent:
         }
 
     async def _web_would_help(self, user: str, scratch: str) -> bool:
-        """Ask the model a single, cheap yes/no: would answering this well
-        benefit from a current web search? This replaces brittle keyword lists
-        with the model's own judgment. It is a tiny generation (a few tokens),
-        so it adds little latency. On any parse ambiguity we default to True
-        when appropriate for the caller; here we return the model's yes/no and
-        let the caller decide what to do with it.
+        """Ask the model a single, cheap yes/no as a strict 1 or 0: would
+        answering this well benefit from a live web search? This replaces
+        brittle keyword lists with the model's own judgment, and demanding a
+        single digit keeps parsing unambiguous (a plain 'hello' should give 0).
 
-        Returns True for 'yes' (web would help), False for 'no'.
+        Returns True only when the model's first character is '1'; anything else
+        (0, blank, or garbled output) is treated as NO, so it errs toward NOT
+        searching rather than searching on noise.
         """
         today = _datetime.datetime.now().strftime("%A, %B %d, %Y")
         prompt = (
-            f"Today is {today}. Decide if answering the user's message well would "
-            f"benefit from a live web search (for current, recent, changing, or "
-            f"factual-lookup information you might not know or that may be out of "
-            f"date), or if it is small talk / general knowledge / about yourself "
-            f"that needs no web.\n"
+            f"Today is {today}. Decide whether answering the user's message well "
+            f"would need a live web search (for current, recent, changing, or "
+            f"factual-lookup information that may be out of date), as opposed to "
+            f"small talk, general knowledge, or a question about yourself.\n"
             f"Recent conversation (for context):\n{scratch or '(none)'}\n\n"
             f"User message: {user}\n\n"
-            f"Answer with ONE word only: YES if a web search would help, NO if not."
+            f"Respond with a single character and nothing else: 1 if a web search "
+            f"is needed, or 0 if it is not. Answer:"
         )
         try:
-            txt = (await self.llm.generate_async(prompt, 4, 0.0)).strip().lower()
+            txt = (await self.llm.generate_async(prompt, 2, 0.0)).strip()
         except Exception as e:
-            print(f"[web?] classifier error: {type(e).__name__}: {e}; defaulting to NO")
+            print(f"[web?] classifier error: {type(e).__name__}: {e}; defaulting to 0 (NO)")
             return False
-        decision = txt.startswith("y")
-        print(f"[web?] would web help? -> {'YES' if decision else 'NO'} (model said {txt!r})")
+        # Strict: only a leading '1' counts as yes. Everything else -> no.
+        decision = txt[:1] == "1"
+        print(f"[web?] would web help? -> {'YES (1)' if decision else 'NO (0)'} (model said {txt!r})")
         return decision
 
     async def _answer_with_research(self, session_id: str, user: str, full_system_prompt: str,
