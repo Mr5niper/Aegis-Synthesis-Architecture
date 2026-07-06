@@ -13,6 +13,23 @@ from ..memory.inbox import MemoryInbox
 from ..core.user_profile import UserProfile
 from ..learning.style_adapter import StyleAdapter
 
+import datetime as _datetime
+
+def _date_preamble() -> str:
+    """A one-line statement of today's real date, prepended to the system
+    prompt every turn. A local LLM has no clock and no timestamps on its own
+    knowledge, so without this it cannot tell that its memorized facts are
+    stale. Giving it the real date lets it judge for itself that a question
+    about recent/current things needs a web lookup rather than memory."""
+    today = _datetime.datetime.now()
+    return (
+        f"Today's date is {today:%A, %B %d, %Y}. Your built-in knowledge was "
+        f"frozen well before today and has no timestamps, so for anything that "
+        f"can change over time (current events, news, sports, prices, versions, "
+        f"who currently holds a role, anything 'latest'/'recent'/'today'), treat "
+        f"your memory as possibly out of date and use the web tools to check."
+    )
+
 def _extract_first_json(text: str) -> Optional[str]:
     start = text.find("{")
     if start == -1: return None
@@ -101,8 +118,9 @@ class ReActAgent:
         t = (msg or "").strip().lower().rstrip(".!")
         return t in {
             "yes", "y", "yeah", "yep", "yes please", "ok", "okay", "sure",
-            "go", "go ahead", "do it", "search", "search it", "look it up",
-            "please do", "proceed", "fine", "yes go ahead", "go for it",
+            "go", "go ahead", "do it", "do that", "yes do that", "search",
+            "search it", "look it up", "please do", "proceed", "fine",
+            "yes go ahead", "go for it",
         }
 
     async def run(self, session_id: str, user: str, cancel: asyncio.Event) -> AsyncGenerator[str, None]:
@@ -140,7 +158,7 @@ class ReActAgent:
         profile_prompt = self.profile.get_system_prompt_addon()
         style_prompt = self.style_adapter.get_adapted_prompt_prefix()
 
-        full_system_prompt = f"{self.system_prompt} {profile_prompt} {style_prompt}".strip()
+        full_system_prompt = f"{_date_preamble()} {self.system_prompt} {profile_prompt} {style_prompt}".strip()
 
         scratch = self.mem.get_recent_context(session_id)
         rag = await asyncio.get_event_loop().run_in_executor(None, self.kb.retrieve_context, user, 3)
@@ -167,6 +185,15 @@ class ReActAgent:
             if js:
                 try: call = ToolCall.model_validate(json.loads(js))
                 except ValidationError: pass
+
+            # Visibility: print what the router decided so failures are diagnosable
+            # from the console instead of guessed at. Shows the chosen tool (or
+            # 'none'/unparsed) and the raw router text when nothing parsed.
+            if call and call.tool != "none":
+                print(f"[route] step {step}: tool={call.tool} args={call.args}")
+            else:
+                _parsed = "none" if (call and call.tool == "none") else "UNPARSED"
+                print(f"[route] step {step}: {_parsed} (no tool) :: router said: {route_text.strip()[:160]!r}")
 
             if not call or call.tool == "none":
                 full_answer = ""
@@ -227,6 +254,7 @@ class ReActAgent:
                 return
 
             obs = await self.tools.call(call.tool, call.args)
+            print(f"[route] ran {call.tool}: {len(obs)} chars returned; head={obs[:120]!r}")
             observations.append(f"{call.tool} -> {obs[:800]}")
             scratch += f"\nAssistant: {json.dumps(call.model_dump(exclude_none=True))}\nObservation: {obs}"
 
@@ -248,7 +276,7 @@ class ReActAgent:
         distillation. Still records the turn so conversation history is intact."""
         profile_prompt = self.profile.get_system_prompt_addon()
         style_prompt = self.style_adapter.get_adapted_prompt_prefix()
-        full_system_prompt = f"{self.system_prompt} {profile_prompt} {style_prompt}".strip()
+        full_system_prompt = f"{_date_preamble()} {self.system_prompt} {profile_prompt} {style_prompt}".strip()
         # Include only recent conversation for continuity; no RAG/observations.
         scratch = self.mem.get_recent_context(session_id)
         # Fold prior-conversation context into the system message; the current
