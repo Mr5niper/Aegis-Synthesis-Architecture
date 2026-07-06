@@ -1,7 +1,8 @@
 # Tool descriptions shown to the router so the model knows WHAT each tool does
 # and WHEN to use it. Keep this in sync with AsyncToolRegistry.
 TOOL_DESCRIPTIONS = {
-    "search_web": "Search the live internet for current, factual, or recent information (news, prices, releases, people, events, anything that may have changed or that you are unsure about). args: {\"query\": \"...\", \"k\": 5}",
+    "search_web": "Search the live internet and get a list of result links with short snippets. Use when you just need to find pages. args: {\"query\": \"...\", \"k\": 5}",
+    "research_web": "Search the web AND read the top results, returning what each source says with its URL. Use this for most 'look it up' / 'search online' / current-info questions, because it finds the answer and the source in one step. args: {\"query\": \"...\", \"k\": 4}",
     "fetch_url": "Download and read the text of a specific web page. args: {\"url\": \"https://...\"}",
     "ingest_url": "Download a web page and store it in the knowledge base for later. args: {\"url\": \"https://...\"}",
     "calc": "Evaluate a arithmetic expression exactly. args: {\"expr\": \"23 * 456\"}",
@@ -28,10 +29,10 @@ User: What is 19% of 240?
 { "tool": "calc", "args": { "expr": "240 * 0.19" }, "rationale": "Exact arithmetic." }
 
 User: Who won the F1 race last weekend?
-{ "tool": "search_web", "args": { "query": "F1 race winner last weekend", "k": 5 }, "rationale": "Recent event, needs live info." }
+{ "tool": "research_web", "args": { "query": "F1 race winner last weekend", "k": 4 }, "rationale": "Recent event; find it and read the sources." }
 
 User: What's the latest stable version of Python?
-{ "tool": "search_web", "args": { "query": "latest stable Python version", "k": 5 }, "rationale": "Version info changes over time." }
+{ "tool": "research_web", "args": { "query": "latest stable Python version", "k": 4 }, "rationale": "Version info changes; look it up and cite." }
 
 User: Summarize what's on this page https://example.com/post
 { "tool": "fetch_url", "args": { "url": "https://example.com/post" }, "rationale": "Need the page contents." }
@@ -46,7 +47,7 @@ User: check the news on cnn.com
 { "tool": "fetch_url", "args": { "url": "https://cnn.com" }, "rationale": "User named a site to read; fetch it." }
 
 User: who did the Portland Trail Blazers just trade for?
-{ "tool": "search_web", "args": { "query": "Portland Trail Blazers latest trade", "k": 5 }, "rationale": "Recent event, needs live info." }
+{ "tool": "research_web", "args": { "query": "Portland Trail Blazers latest trade", "k": 4 }, "rationale": "Recent event; find it and read the sources." }
 
 User: What time is it?
 { "tool": "now", "args": {}, "rationale": "Needs the current clock." }
@@ -81,16 +82,18 @@ def react_step_prompt(system: str, tools_list: list[str], scratchpad: str, user:
         f"already know, you MUST choose \"none\" and answer directly. Never use "
         f"kb_add or kb_query for simple conversational questions; the knowledge base "
         f"is only for information the user explicitly asked you to store or look up.\n"
-        f"Only use a tool when the question genuinely requires one: search_web for "
-        f"current events, recent facts, prices, versions, or people you are not "
-        f"certain about; calc for arithmetic; now for the current time; fetch_url "
-        f"for a specific page. When the user names a website or asks you to check, "
-        f"open, read, or look at a site (even a bare domain like \"espn.com\"), you "
-        f"DO have web access through these tools: use fetch_url for that page (add "
-        f"\"https://\" to a bare domain), or search_web if they name a site plus a "
-        f"topic. Never reply that you cannot access the internet or a website; the "
-        f"tools above are your web access. If in doubt for a conversational message, "
-        f"choose \"none\".\n\n"
+        f"Only use a tool when the question genuinely requires one: research_web "
+        f"for most 'look it up' / 'search online' / current-info questions (it "
+        f"searches and reads the top results so you can answer with a source); "
+        f"search_web if you only need a list of links; calc for arithmetic; now "
+        f"for the current time; fetch_url for one specific page. When the user "
+        f"names a website or asks you to check, open, read, or look at a site "
+        f"(even a bare domain like \"espn.com\"), you DO have web access through "
+        f"these tools: use fetch_url for that page (add \"https://\" to a bare "
+        f"domain), or research_web if they name a site plus a topic. Never reply "
+        f"that you cannot access the internet or a website; the tools above are "
+        f"your web access. If in doubt for a conversational message, choose "
+        f"\"none\".\n\n"
         f"{ROUTER_EXAMPLES}\n\n"
         f"Conversation and observations so far:\n{scratchpad}\n\n"
         f"User: {user}\n"

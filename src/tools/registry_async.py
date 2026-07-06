@@ -2,7 +2,7 @@ import json, asyncio
 import os
 from typing import Dict, Any, List, Callable, Optional
 from ..internet.search import WebSearch
-from ..internet.fetch import fetch_text
+from ..internet.fetch import fetch_text, extract_relevant
 from ..internet.cache import WebCache
 from ..memory.vector_store import LiteVectorStore
 from ..core.config import AppConfig
@@ -34,6 +34,7 @@ class AsyncToolRegistry:
             "calc": self._calc,
             "none": self._none,
             "search_web": self._search_web if cfg.assistant.allow_web_search else self._blocked,
+            "research_web": self._research_web if cfg.assistant.allow_web_search else self._blocked,
             "fetch_url": self._fetch_url if cfg.assistant.allow_web_search else self._blocked,
             "kb_add": self._kb_add,
             "kb_query": self._kb_query,
@@ -50,6 +51,34 @@ class AsyncToolRegistry:
 
     def list_tools(self) -> List[str]:
         return list(self.tools.keys())
+
+    # Tool names that reach out to the internet. Used by the agent to decide
+    # when the one-time, per-session web-search consent gate applies.
+    WEB_TOOLS = ("search_web", "research_web", "fetch_url", "ingest_url")
+
+    def web_open(self) -> bool:
+        """True when 'Allow all sites' is on (the allow-domains list is empty),
+        meaning web tools may read any page without asking. When False, the
+        agent asks for one-time consent and only allowlisted domains are read."""
+        return not bool(self.cfg.assistant.allow_domains)
+
+    def consent_warning(self) -> str:
+        """The message shown once per session before the first web search when
+        'Allow all sites' is OFF. Explains what happens and the limitation."""
+        allowed = ", ".join(self.cfg.assistant.allow_domains) or "(none listed)"
+        return (
+            "\n\n---\n"
+            "To answer that, I can search the web with DuckDuckGo. Before I do, "
+            "you should know:\n"
+            "- Your search words are sent to DuckDuckGo (they leave this machine).\n"
+            "- 'Allow all sites' is currently OFF, so I can only open and read "
+            "pages from your allowed-domains list: " + allowed + ".\n"
+            "- Results from other sites will show up in the search list but I "
+            "will not be able to open them, so the answer may be limited.\n"
+            "You can turn on 'Allow all sites' in the Web Access panel for full "
+            "reading. Reply 'yes' to search now within the allowed list. I will "
+            "only ask this once per session."
+        )
 
     async def call(self, name: str, args: Dict[str, Any]) -> str:
         if name not in self.tools:
@@ -89,6 +118,56 @@ class AsyncToolRegistry:
         q, k = str(a.get("query","")), int(a.get("k",5))
         res = await asyncio.get_event_loop().run_in_executor(None, self.searcher.search, q, k)
         return json.dumps(res, ensure_ascii=False)
+
+    async def _research_web(self, a):
+        """Full research loop in one call: search, then fetch and read the top
+        results, returning a compact digest the model answers from.
+
+        For each of the top results (honoring the domain allowlist), fetch the
+        page, extract the passage most relevant to the query, and assemble a
+        numbered, source-attributed digest. The model reads this and writes the
+        answer with a citation. Pages blocked by the allowlist or that error out
+        are still listed with their status, so the model can point the user to
+        the page or explain why it could not be read."""
+        q = str(a.get("query", ""))
+        k = int(a.get("k", 4))
+        if not q:
+            return "Error: 'query' argument required."
+        # 1. Search.
+        results = await asyncio.get_event_loop().run_in_executor(None, self.searcher.search, q, max(k, 3))
+        if not results:
+            return ("No search results were returned (the search backend may be "
+                    "temporarily rate-limited). Try rephrasing or ask again.")
+        # 2. Fetch and distil the top results.
+        loop = asyncio.get_event_loop()
+        parts = []
+        read_count = 0
+        for i, r in enumerate(results[:k], 1):
+            url = r.get("url", "")
+            title = r.get("title", "") or url
+            snippet = r.get("snippet", "") or ""
+            page = ""
+            if url:
+                if cached := self.cache.get(url):
+                    page = cached
+                else:
+                    page = await loop.run_in_executor(
+                        None, fetch_text, url, "Aegis/1.0", self.cfg.assistant.allow_domains)
+                    if page and not page.startswith("[Blocked") and not page.startswith("[Error"):
+                        self.cache.put(url, page)
+            if page.startswith("[Blocked") or page.startswith("[Error"):
+                # Could not read the page; give the model the search snippet and
+                # the status so it can still point the user there.
+                body = f"(could not read page: {page}) Search snippet: {snippet}"
+            elif page:
+                body = extract_relevant(page, q)
+                read_count += 1
+            else:
+                body = f"Search snippet: {snippet}"
+            parts.append(f"[{i}] {title}\nURL: {url}\n{body}")
+        header = (f"Research for: {q}\nRead {read_count} of {len(results[:k])} top "
+                  f"results. Use these sources to answer and cite the URL(s) you used.\n")
+        return header + "\n\n".join(parts)
 
     async def _fetch_url(self, a):
         url = str(a.get("url",""))
