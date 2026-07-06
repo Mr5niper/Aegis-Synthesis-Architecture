@@ -228,12 +228,22 @@ class ReActAgent:
 
         # Detect an unusable result (empty, rate-limited note, blocked, or error)
         # so we can tell the user honestly rather than dress up stale memory.
+        # NOTE: tool-level failures from the registry come back as plain
+        # "Error: ..." (e.g. "Error: tool 'research_web' timed out",
+        # "Error executing ...") WITHOUT the leading bracket, and a disabled tool
+        # returns "Access disabled ...". These must count as unusable too --
+        # otherwise a timed-out search was handed to the model as if it were real
+        # web content, and the model quietly answered from stale memory with no
+        # honest note. Match those forms as well as the bracketed ones.
         stripped = obs.strip()
         unusable = (
             (not stripped)
             or stripped.startswith("No search results")
             or stripped.startswith("[Blocked")
             or stripped.startswith("[Error")
+            or stripped.startswith("Error:")
+            or stripped.startswith("Error executing")
+            or stripped.startswith("Access disabled")
         )
         note = ""
         observations = "" if unusable else obs

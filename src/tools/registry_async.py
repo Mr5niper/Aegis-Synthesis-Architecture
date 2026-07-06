@@ -159,23 +159,38 @@ class AsyncToolRegistry:
             return ("No search results were returned (the search backend may be "
                     "temporarily rate-limited). Try rephrasing or ask again.")
         # 2. Fetch and distil the top results.
+        #
+        # Fetch the pages CONCURRENTLY, not one after another. Each fetch_text
+        # can take up to ~12s; doing k=4 of them sequentially can total ~48s and
+        # blow past the tool timeout (tool_timeout_sec, e.g. 20s), which cut the
+        # whole research call off and made the agent fall back to a stale memory
+        # answer. Running them in parallel makes the wall-clock ~= a single
+        # fetch, so all sources are actually read within the budget.
         loop = asyncio.get_event_loop()
+        top = list(enumerate(results[:k], 1))
+
+        async def _get_page(url: str) -> str:
+            """Return cached text if present, else fetch it (in a thread)."""
+            if not url:
+                return ""
+            if cached := self.cache.get(url):
+                return cached
+            page = await loop.run_in_executor(
+                None, fetch_text, url, "Aegis/1.0", self.cfg.assistant.allow_domains,
+                9000, self.cfg.assistant.allow_all_web)
+            if page and not page.startswith("[Blocked") and not page.startswith("[Error"):
+                self.cache.put(url, page)
+            return page
+
+        pages = await asyncio.gather(*[_get_page(r.get("url", "")) for _, r in top])
+
         parts = []
         read_count = 0
-        for i, r in enumerate(results[:k], 1):
+        for (i, r), page in zip(top, pages):
             url = r.get("url", "")
             title = r.get("title", "") or url
             snippet = r.get("snippet", "") or ""
-            page = ""
-            if url:
-                if cached := self.cache.get(url):
-                    page = cached
-                else:
-                    page = await loop.run_in_executor(
-                        None, fetch_text, url, "Aegis/1.0", self.cfg.assistant.allow_domains,
-                        9000, self.cfg.assistant.allow_all_web)
-                    if page and not page.startswith("[Blocked") and not page.startswith("[Error"):
-                        self.cache.put(url, page)
+            page = page or ""
             if page.startswith("[Blocked") or page.startswith("[Error"):
                 # Could not read the page; give the model the search snippet and
                 # the status so it can still point the user there.
