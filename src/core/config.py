@@ -8,7 +8,15 @@ class ModelConfig(BaseModel):
     url: str; path: str; sha256: str = ""; ctx_size: int = 4096; n_gpu_layers: int = 0
 
 class AssistantConfig(BaseModel):
-    system_prompt: str; max_reasoning_steps: int = 5; allow_web_search: bool = True
+    system_prompt: str; max_reasoning_steps: int = 5
+    # Web-access MASTER switch. This is deliberately SESSION-ONLY and is FORCED
+    # OFF at every startup (see load_config / save_config below), no matter what
+    # is on disk. Aegis is isolated-AI-first: it must always boot with the web
+    # OFF, even if you left it on when you closed. You turn it on in the Web
+    # Access panel for the current run only; the next launch is off again. Every
+    # OTHER web setting (allow_all_web, the domain list, the provider, the key)
+    # DOES persist, so enabling this returns to exactly the prior state.
+    allow_web_search: bool = False
     tool_timeout_sec: int = 20; proactive_enabled: bool = True
     quiet_hours: Tuple[int, int] = (23, 7); suggestions_per_min: int = 5
     allow_domains: List[str] = Field(default_factory=list)
@@ -76,7 +84,14 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     path = resolve_config_path(path)
     with open(path, "r") as f:
         data = yaml.safe_load(f)
-    return AppConfig(**data)
+    cfg = AppConfig(**data)
+    # ISOLATED-AI-FIRST: web access ALWAYS starts OFF, on every launch, no
+    # matter what the file says. This is intentional and non-negotiable: even if
+    # the user left it on when they closed (and a stray 'true' is on disk), the
+    # program boots with the web disabled. The user re-enables it per session in
+    # the Web Access panel. Every other web setting is loaded/persisted normally.
+    cfg.assistant.allow_web_search = False
+    return cfg
 
 def save_config(cfg: AppConfig, path: str = "config.yaml") -> str:
     """Write the config back to YAML, to the same file load_config reads.
@@ -94,6 +109,16 @@ def save_config(cfg: AppConfig, path: str = "config.yaml") -> str:
         qh = data.get("assistant", {}).get("quiet_hours")
         if isinstance(qh, tuple):
             data["assistant"]["quiet_hours"] = list(qh)
+    except Exception:
+        pass
+    # ISOLATED-AI-FIRST: never persist the web-access master switch as on. The
+    # on-disk value is always False so the file never implies the web will start
+    # enabled (load_config forces it off regardless, but this keeps the saved
+    # file honest and prevents a stray 'true' from ever lingering). This only
+    # rewrites the value being WRITTEN; the live in-memory cfg is untouched, so a
+    # session the user turned on stays on until they close.
+    try:
+        data["assistant"]["allow_web_search"] = False
     except Exception:
         pass
     with open(path, "w") as f:
@@ -124,6 +149,27 @@ def update_web_access(cfg: AppConfig, policy, allow_all: bool, domains: List[str
         policy.allow_domains = [] if allow_all else cleaned
         try:
             policy.allow_all_web = bool(allow_all)
+        except Exception:
+            pass
+    return save_config(cfg, path)
+
+def update_web_enabled(cfg: AppConfig, policy, enabled: bool, path: str = "config.yaml") -> str:
+    """Apply and persist the web-access MASTER switch (allow_web_search).
+
+    This is the TOP-LEVEL control, above 'Allow all sites'. When False, the
+    agent performs no web activity at all: it does not run the web-need
+    classifier, does not resume any pending web consent, and calls no web tool
+    (the tools themselves also refuse while it is off). All the other web
+    settings (Allow all sites, the domain list, the provider, the key) are left
+    untouched so they return to their exact prior state when this is turned back
+    on. Set in place on cfg so the already-constructed tool registry and agent
+    (which read cfg.assistant at call time) see the change immediately. The
+    policy copy is kept in sync too. Returns the saved path.
+    """
+    cfg.assistant.allow_web_search = bool(enabled)
+    if policy is not None:
+        try:
+            policy.allow_web_search = bool(enabled)
         except Exception:
             pass
     return save_config(cfg, path)

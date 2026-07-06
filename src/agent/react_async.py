@@ -266,6 +266,19 @@ class ReActAgent:
         # 1. Update style model based on user input
         self.style_adapter.analyze_message(user)
 
+        # WEB ACCESS MASTER SWITCH (top-level, above 'Allow all sites'): when
+        # off, the assistant touches the web in NO way. It does not run the
+        # web-need classifier, does not resume any pending web consent, and calls
+        # no web tool -- it answers purely from local knowledge. Enforced here in
+        # the program so the model never even attempts a lookup. Read live from
+        # cfg so toggling it in the UI takes effect on the very next turn.
+        if not bool(self.tools.cfg.assistant.allow_web_search):
+            self._pending_web.pop(session_id, None)  # drop any stale consent ask
+            print("[web?] web access master OFF -> local answer only (no web attempted)")
+            async for tok in self._fast_answer(session_id, user, cancel):
+                yield tok
+            return
+
         # CONSENT REPLY: if this session is waiting on a yes/no for web-search
         # consent (asked once when 'Allow all sites' is OFF) and the user just
         # said yes, grant consent for the session and resume the ORIGINAL
