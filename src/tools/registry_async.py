@@ -33,12 +33,17 @@ class AsyncToolRegistry:
             "now": self._now,
             "calc": self._calc,
             "none": self._none,
-            "search_web": self._search_web if cfg.assistant.allow_web_search else self._blocked,
-            "research_web": self._research_web if cfg.assistant.allow_web_search else self._blocked,
-            "fetch_url": self._fetch_url if cfg.assistant.allow_web_search else self._blocked,
+            # Web tools are always registered; each checks the allow_web_search
+            # master switch live at call time (see _web_enabled), so toggling web
+            # access on/off in the UI takes effect immediately without rebuilding
+            # the registry. When the switch is off they return the disabled
+            # message (and the agent does not call them at all anyway).
+            "search_web": self._search_web,
+            "research_web": self._research_web,
+            "fetch_url": self._fetch_url,
             "kb_add": self._kb_add,
             "kb_query": self._kb_query,
-            "ingest_url": self._ingest_url if cfg.assistant.allow_web_search else self._blocked,
+            "ingest_url": self._ingest_url,
         }
 
         # Conditionally add code_exec
@@ -56,11 +61,18 @@ class AsyncToolRegistry:
     # when the one-time, per-session web-search consent gate applies.
     WEB_TOOLS = ("search_web", "research_web", "fetch_url", "ingest_url")
 
+    def _web_enabled(self) -> bool:
+        """True when the web-access MASTER switch (allow_web_search) is on. Read
+        live so the UI toggle takes effect immediately. When False, all web
+        tools refuse and web_open() is forced off."""
+        return bool(self.cfg.assistant.allow_web_search)
+
     def web_open(self) -> bool:
         """True when the 'Allow all sites' master switch is on, meaning web
         tools may read any page without asking. When False, only the domains in
-        allow_domains are readable and the agent asks one-time consent."""
-        return bool(self.cfg.assistant.allow_all_web)
+        allow_domains are readable and the agent asks one-time consent. Also
+        False whenever the web-access master switch is off (no web at all)."""
+        return self._web_enabled() and bool(self.cfg.assistant.allow_all_web)
 
     def consent_warning(self) -> str:
         """The message shown once per session before the first web search when
@@ -115,6 +127,8 @@ class AsyncToolRegistry:
             return f"Error: {e}"
 
     async def _search_web(self, a):
+        if not self._web_enabled():
+            return "Access disabled by configuration."
         q, k = str(a.get("query","")), int(a.get("k",5))
         res = await asyncio.get_event_loop().run_in_executor(
             None, self.searcher.search, q, k,
@@ -131,6 +145,8 @@ class AsyncToolRegistry:
         answer with a citation. Pages blocked by the allowlist or that error out
         are still listed with their status, so the model can point the user to
         the page or explain why it could not be read."""
+        if not self._web_enabled():
+            return "Access disabled by configuration."
         q = str(a.get("query", ""))
         k = int(a.get("k", 4))
         if not q:
@@ -175,6 +191,8 @@ class AsyncToolRegistry:
         return header + "\n\n".join(parts)
 
     async def _fetch_url(self, a):
+        if not self._web_enabled():
+            return "Access disabled by configuration."
         url = str(a.get("url",""))
         if cached := self.cache.get(url):
             return cached
@@ -192,6 +210,8 @@ class AsyncToolRegistry:
         return await asyncio.get_event_loop().run_in_executor(None, self.kb.retrieve_context, q, k)
 
     async def _ingest_url(self, a):
+        if not self._web_enabled():
+            return "Access disabled by configuration."
         url = str(a.get("url",""))
         text = self.cache.get(url)
         if not text:

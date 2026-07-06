@@ -128,6 +128,27 @@ def update_web_access(cfg: AppConfig, policy, allow_all: bool, domains: List[str
             pass
     return save_config(cfg, path)
 
+def update_web_enabled(cfg: AppConfig, policy, enabled: bool, path: str = "config.yaml") -> str:
+    """Apply and persist the web-access MASTER switch (allow_web_search).
+
+    This is the TOP-LEVEL control, above 'Allow all sites'. When False, the
+    agent performs no web activity at all: it does not run the web-need
+    classifier, does not resume any pending web consent, and calls no web tool
+    (the tools themselves also refuse while it is off). All the other web
+    settings (Allow all sites, the domain list, the provider, the key) are left
+    untouched so they return to their exact prior state when this is turned back
+    on. Set in place on cfg so the already-constructed tool registry and agent
+    (which read cfg.assistant at call time) see the change immediately. The
+    policy copy is kept in sync too. Returns the saved path.
+    """
+    cfg.assistant.allow_web_search = bool(enabled)
+    if policy is not None:
+        try:
+            policy.allow_web_search = bool(enabled)
+        except Exception:
+            pass
+    return save_config(cfg, path)
+
 def update_search_provider(cfg: AppConfig, provider: str, tavily_api_key: str, path: str = "config.yaml") -> str:
     """Apply and persist the search-provider choice and Tavily key.
 
