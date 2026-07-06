@@ -65,6 +65,22 @@ _ANSWER_STOP = [
 # three sequential model calls.
 import re as _re
 
+# Matches an http/https URL anywhere in a message. Used so that when the user
+# pastes a link ("go to this page: https://..."), the program fetches THAT page
+# directly instead of sending the whole sentence to a search engine.
+_URL_RE = _re.compile(r"https?://[^\s<>\"')]+", _re.IGNORECASE)
+
+def _first_url(text: str) -> Optional[str]:
+    """Return the first http(s) URL in the text, or None. Trailing sentence
+    punctuation is trimmed so 'see https://x.com/page.' yields the clean URL."""
+    if not text:
+        return None
+    m = _URL_RE.search(text)
+    if not m:
+        return None
+    url = m.group(0).rstrip(".,;:!?)")
+    return url
+
 _TOOL_HINTS = (
     "http://", "https://", "www.", ".com", ".org", ".net", ".io",
     "search", "google", "look up", "lookup", "latest", "current",
@@ -155,37 +171,70 @@ class ReActAgent:
 
     async def _answer_with_research(self, session_id: str, user: str, full_system_prompt: str,
                                     scratch: str, rag: str, cancel: asyncio.Event):
-        """Run the web research loop, then stream an answer grounded in the
-        results plus local knowledge. Enforced in code so the model cannot skip
-        the search. Degrades gracefully: if the search fails, is empty, or times
-        out, fall back to a local answer and say so, instead of hanging or
-        pretending it searched."""
+        """Get web content, then stream an answer grounded in it plus local
+        knowledge. Enforced in code so the model cannot skip or fake the lookup.
+
+        Two paths:
+          - If the message contains a URL, FETCH THAT PAGE DIRECTLY (fetch_url).
+            This is what "go to this page: https://..." needs; it does not touch
+            the search engine at all, so it works even when search is rate-limited.
+          - Otherwise, run the search-based research loop.
+
+        Degrades gracefully: on timeout / error / empty result, fall back to a
+        local answer and say so, instead of hanging or pretending it looked."""
+        budget = max(15, int(self.tools.cfg.assistant.tool_timeout_sec) + 10)
+        url = _first_url(user)
         obs = ""
         try:
-            # Bound the whole research step so slow/unresponsive internet cannot
-            # hang the turn. tool_timeout_sec is the per-tool cap; give research
-            # a little more since it does several fetches, but still bounded.
-            budget = max(15, int(self.tools.cfg.assistant.tool_timeout_sec) + 10)
-            obs = await asyncio.wait_for(
-                self.tools.call("research_web", {"query": user, "k": 4}),
-                timeout=budget,
-            )
-            print(f"[web?] research_web returned {len(obs)} chars; head={obs[:120]!r}")
+            if url:
+                # Direct fetch of the pasted link. Bypasses search entirely.
+                print(f"[web?] message has a URL -> fetching directly: {url}")
+                page = await asyncio.wait_for(
+                    self.tools.call("fetch_url", {"url": url}), timeout=budget)
+                if page and not page.startswith("[Blocked") and not page.startswith("[Error"):
+                    # Pull the passages most relevant to what the user asked, so
+                    # the answer step actually reads the page instead of ignoring
+                    # it. extract_relevant lives in the fetch module; reach it via
+                    # the tools' fetch import through a tiny local import to avoid
+                    # widening this module's imports.
+                    from ..internet.fetch import extract_relevant
+                    snippet = extract_relevant(page, user)
+                    obs = f"Fetched page: {url}\n{snippet}"
+                else:
+                    # Blocked/error: keep the status so we report honestly.
+                    obs = page or ""
+                print(f"[web?] fetch_url returned {len(obs)} chars; head={obs[:120]!r}")
+            else:
+                obs = await asyncio.wait_for(
+                    self.tools.call("research_web", {"query": user, "k": 4}), timeout=budget)
+                print(f"[web?] research_web returned {len(obs)} chars; head={obs[:120]!r}")
         except asyncio.TimeoutError:
             obs = ""
-            print("[web?] research_web timed out; falling back to local answer")
+            print("[web?] web step timed out; falling back to local answer")
         except Exception as e:
             obs = ""
-            print(f"[web?] research_web error: {type(e).__name__}: {e}; local fallback")
+            print(f"[web?] web step error: {type(e).__name__}: {e}; local fallback")
 
-        # Detect an unusable result (empty, rate-limited note, or all-blocked)
+        # Detect an unusable result (empty, rate-limited note, blocked, or error)
         # so we can tell the user honestly rather than dress up stale memory.
-        unusable = (not obs) or obs.strip().startswith("No search results")
+        stripped = obs.strip()
+        unusable = (
+            (not stripped)
+            or stripped.startswith("No search results")
+            or stripped.startswith("[Blocked")
+            or stripped.startswith("[Error")
+        )
         note = ""
         observations = "" if unusable else obs
         if unusable:
-            note = ("\n\n(Note: I could not reach the web just now, so this answer "
-                    "is from my local knowledge and may be out of date.)")
+            if url:
+                note = (f"\n\n(Note: I could not read {url} just now"
+                        + (f" - {stripped}" if stripped else "")
+                        + ". This answer is from my local knowledge and may be "
+                        "out of date.)")
+            else:
+                note = ("\n\n(Note: I could not reach the web just now, so this "
+                        "answer is from my local knowledge and may be out of date.)")
 
         full_answer = ""
         sys_with_ctx = full_system_prompt
