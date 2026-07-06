@@ -85,16 +85,53 @@ class ReActAgent:
         self.profile = user_profile
         self.style_adapter = style_adapter
         self.distill_facts = distill_facts
+        # Per-session web-search consent, used only when 'Allow all sites' is OFF.
+        # _web_consent: session_ids that have granted consent this session.
+        # _pending_web: session_id -> the original user question that triggered
+        # the consent ask, so when the user says 'yes' we run the search for that
+        # question WITHOUT making them type it again.
+        self._web_consent = set()
+        self._pending_web = {}
+
+    @staticmethod
+    def _is_affirmative(msg: str) -> bool:
+        """True if the message is a short yes/go-ahead. Used only to answer a
+        pending web-search consent prompt; kept tight so normal messages that
+        merely contain 'yes' somewhere do not trigger it."""
+        t = (msg or "").strip().lower().rstrip(".!")
+        return t in {
+            "yes", "y", "yeah", "yep", "yes please", "ok", "okay", "sure",
+            "go", "go ahead", "do it", "search", "search it", "look it up",
+            "please do", "proceed", "fine", "yes go ahead", "go for it",
+        }
 
     async def run(self, session_id: str, user: str, cancel: asyncio.Event) -> AsyncGenerator[str, None]:
         # 1. Update style model based on user input
         self.style_adapter.analyze_message(user)
 
+        # CONSENT REPLY: if this session is waiting on a yes/no for web-search
+        # consent (asked once when 'Allow all sites' is OFF) and the user just
+        # said yes, grant consent for the session and resume the ORIGINAL
+        # question they asked, so they never have to type it twice. A 'no' (or
+        # anything not affirmative) clears the pending state and is handled as a
+        # normal message.
+        resumed_from_consent = False
+        pending = self._pending_web.get(session_id)
+        if pending is not None:
+            self._pending_web.pop(session_id, None)
+            if self._is_affirmative(user):
+                self._web_consent.add(session_id)
+                user = pending  # resume the original question
+                resumed_from_consent = True
+            # else: fall through and treat the new message normally.
+
         # FAST PATH: for short, clearly-conversational messages (greetings, small
         # talk, brief questions with no tool hints) skip the routing call, RAG
         # retrieval, and fact distillation entirely and stream a single answer.
         # This turns a plain "hello" from three sequential model calls into one.
-        if not _needs_full_pipeline(user):
+        # A question resumed after web-search consent must NOT take the fast path
+        # (that would skip the search the user just approved).
+        if not resumed_from_consent and not _needs_full_pipeline(user):
             async for tok in self._fast_answer(session_id, user, cancel):
                 yield tok
             return
@@ -161,6 +198,33 @@ class ReActAgent:
             # bubble should contain only the final answer. The tool still runs
             # below, and the rationale/observations still feed the model via the
             # scratchpad - the user just doesn't see the plumbing.
+
+            # WEB CONSENT GATE (one time per session, only when 'Allow all
+            # sites' is OFF). The router choosing a web tool is the signal that a
+            # search is warranted. If web access is not open and this session has
+            # not yet consented, do NOT search silently: first give the best
+            # local answer so the user is not left waiting, then show the warning
+            # and ask permission once. We remember the original question so a
+            # 'yes' resumes it without re-asking. Enforced here in code, so both
+            # models behave the same regardless of prompt-following.
+            if (call.tool in self.tools.WEB_TOOLS
+                    and not self.tools.web_open()
+                    and session_id not in self._web_consent):
+                # Local-first answer from the model's own knowledge.
+                full_answer = ""
+                sys_with_ctx = full_system_prompt
+                if scratch:
+                    sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
+                messages = build_answer_messages(sys_with_ctx, [], rag, "\n".join(observations), user)
+                async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
+                    full_answer += tok
+                    yield tok
+                # Ask for consent once; remember the question to resume on 'yes'.
+                warning = self.tools.consent_warning()
+                yield warning
+                self._pending_web[session_id] = user
+                self.mem.add_message(session_id, user, full_answer + warning, context="\n".join(observations))
+                return
 
             obs = await self.tools.call(call.tool, call.args)
             observations.append(f"{call.tool} -> {obs[:800]}")
