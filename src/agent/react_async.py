@@ -123,6 +123,85 @@ class ReActAgent:
             "yes go ahead", "go for it",
         }
 
+    async def _web_would_help(self, user: str, scratch: str) -> bool:
+        """Ask the model a single, cheap yes/no: would answering this well
+        benefit from a current web search? This replaces brittle keyword lists
+        with the model's own judgment. It is a tiny generation (a few tokens),
+        so it adds little latency. On any parse ambiguity we default to True
+        when appropriate for the caller; here we return the model's yes/no and
+        let the caller decide what to do with it.
+
+        Returns True for 'yes' (web would help), False for 'no'.
+        """
+        today = _datetime.datetime.now().strftime("%A, %B %d, %Y")
+        prompt = (
+            f"Today is {today}. Decide if answering the user's message well would "
+            f"benefit from a live web search (for current, recent, changing, or "
+            f"factual-lookup information you might not know or that may be out of "
+            f"date), or if it is small talk / general knowledge / about yourself "
+            f"that needs no web.\n"
+            f"Recent conversation (for context):\n{scratch or '(none)'}\n\n"
+            f"User message: {user}\n\n"
+            f"Answer with ONE word only: YES if a web search would help, NO if not."
+        )
+        try:
+            txt = (await self.llm.generate_async(prompt, 4, 0.0)).strip().lower()
+        except Exception as e:
+            print(f"[web?] classifier error: {type(e).__name__}: {e}; defaulting to NO")
+            return False
+        decision = txt.startswith("y")
+        print(f"[web?] would web help? -> {'YES' if decision else 'NO'} (model said {txt!r})")
+        return decision
+
+    async def _answer_with_research(self, session_id: str, user: str, full_system_prompt: str,
+                                    scratch: str, rag: str, cancel: asyncio.Event):
+        """Run the web research loop, then stream an answer grounded in the
+        results plus local knowledge. Enforced in code so the model cannot skip
+        the search. Degrades gracefully: if the search fails, is empty, or times
+        out, fall back to a local answer and say so, instead of hanging or
+        pretending it searched."""
+        obs = ""
+        try:
+            # Bound the whole research step so slow/unresponsive internet cannot
+            # hang the turn. tool_timeout_sec is the per-tool cap; give research
+            # a little more since it does several fetches, but still bounded.
+            budget = max(15, int(self.tools.cfg.assistant.tool_timeout_sec) + 10)
+            obs = await asyncio.wait_for(
+                self.tools.call("research_web", {"query": user, "k": 4}),
+                timeout=budget,
+            )
+            print(f"[web?] research_web returned {len(obs)} chars; head={obs[:120]!r}")
+        except asyncio.TimeoutError:
+            obs = ""
+            print("[web?] research_web timed out; falling back to local answer")
+        except Exception as e:
+            obs = ""
+            print(f"[web?] research_web error: {type(e).__name__}: {e}; local fallback")
+
+        # Detect an unusable result (empty, rate-limited note, or all-blocked)
+        # so we can tell the user honestly rather than dress up stale memory.
+        unusable = (not obs) or obs.strip().startswith("No search results")
+        note = ""
+        observations = "" if unusable else obs
+        if unusable:
+            note = ("\n\n(Note: I could not reach the web just now, so this answer "
+                    "is from my local knowledge and may be out of date.)")
+
+        full_answer = ""
+        sys_with_ctx = full_system_prompt
+        if scratch:
+            sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
+        messages = build_answer_messages(sys_with_ctx, [], rag, observations, user)
+        async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1,
+                                                     stop=_ANSWER_STOP, cancel_event=cancel):
+            full_answer += tok
+            yield tok
+        if note:
+            yield note
+            full_answer += note
+        self.mem.add_message(session_id, user, full_answer, context=observations)
+        await self._maybe_distill_facts(user, full_answer)
+
     async def run(self, session_id: str, user: str, cancel: asyncio.Event) -> AsyncGenerator[str, None]:
         # 1. Update style model based on user input
         self.style_adapter.analyze_message(user)
@@ -143,17 +222,64 @@ class ReActAgent:
                 resumed_from_consent = True
             # else: fall through and treat the new message normally.
 
-        # FAST PATH: for short, clearly-conversational messages (greetings, small
-        # talk, brief questions with no tool hints) skip the routing call, RAG
-        # retrieval, and fact distillation entirely and stream a single answer.
-        # This turns a plain "hello" from three sequential model calls into one.
-        # A question resumed after web-search consent must NOT take the fast path
-        # (that would skip the search the user just approved).
-        if not resumed_from_consent and not _needs_full_pipeline(user):
-            async for tok in self._fast_answer(session_id, user, cancel):
-                yield tok
-            return
+        # 2. Contextual system prompt parts, needed by every branch below.
+        profile_prompt = self.profile.get_system_prompt_addon()
+        style_prompt = self.style_adapter.get_adapted_prompt_prefix()
+        full_system_prompt = f"{_date_preamble()} {self.system_prompt} {profile_prompt} {style_prompt}".strip()
+        scratch = self.mem.get_recent_context(session_id)
 
+        # DECIDE WITH JUDGMENT, NOT KEYWORDS: ask the model a single cheap yes/no
+        # -- would a live web search help answer this? This replaces the old
+        # keyword gate. The PROGRAM then controls what happens based on the
+        # answer and the web-access setting, so the model never gets to silently
+        # refuse to search.
+        #   - resumed_from_consent means the user already said 'yes' to searching
+        #     a prior question, so we skip the classifier and go straight to
+        #     research.
+        web_helps = resumed_from_consent or await self._web_would_help(user, scratch)
+
+        if web_helps:
+            # RAG/personal facts still enrich the grounded answer.
+            rag = await asyncio.get_event_loop().run_in_executor(None, self.kb.retrieve_context, user, 3)
+            facts = self.graph.facts_for_prompt(8)
+            if facts:
+                rag = (rag + "\n\nPersonal facts:\n" + facts).strip()
+
+            if self.tools.web_open() or session_id in self._web_consent or resumed_from_consent:
+                # Web is allowed: the program runs the research directly and the
+                # model answers from the results (it cannot skip the search).
+                print("[web?] web allowed -> running research directly")
+                async for tok in self._answer_with_research(
+                        session_id, user, full_system_prompt, scratch, rag, cancel):
+                    yield tok
+                return
+            else:
+                # Web is restricted ('Allow all sites' off) and no consent yet:
+                # answer locally first, then ask one-time consent. On 'yes' the
+                # next turn resumes via resumed_from_consent above.
+                print("[web?] web would help but access is restricted -> local answer + consent ask")
+                full_answer = ""
+                sys_with_ctx = full_system_prompt
+                if scratch:
+                    sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
+                messages = build_answer_messages(sys_with_ctx, [], rag, "", user)
+                async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1,
+                                                            stop=_ANSWER_STOP, cancel_event=cancel):
+                    full_answer += tok
+                    yield tok
+                warning = self.tools.consent_warning()
+                yield warning
+                self._pending_web[session_id] = user
+                self.mem.add_message(session_id, user, full_answer + warning, context="")
+                return
+
+        # web_helps == False: no web needed. Fast local answer (one generation).
+        print("[web?] no web needed -> fast local answer")
+        async for tok in self._fast_answer(session_id, user, cancel):
+            yield tok
+        return
+
+    async def _run_legacy_react(self, session_id: str, user: str, cancel: asyncio.Event) -> AsyncGenerator[str, None]:
         # 2. Get contextual system prompt parts (full ReAct path below).
         profile_prompt = self.profile.get_system_prompt_addon()
         style_prompt = self.style_adapter.get_adapted_prompt_prefix()
