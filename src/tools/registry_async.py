@@ -116,7 +116,9 @@ class AsyncToolRegistry:
 
     async def _search_web(self, a):
         q, k = str(a.get("query","")), int(a.get("k",5))
-        res = await asyncio.get_event_loop().run_in_executor(None, self.searcher.search, q, k)
+        res = await asyncio.get_event_loop().run_in_executor(
+            None, self.searcher.search, q, k,
+            self.cfg.assistant.search_provider, self.cfg.assistant.tavily_api_key)
         return json.dumps(res, ensure_ascii=False)
 
     async def _research_web(self, a):
@@ -134,7 +136,9 @@ class AsyncToolRegistry:
         if not q:
             return "Error: 'query' argument required."
         # 1. Search.
-        results = await asyncio.get_event_loop().run_in_executor(None, self.searcher.search, q, max(k, 3))
+        results = await asyncio.get_event_loop().run_in_executor(
+            None, self.searcher.search, q, max(k, 3),
+            self.cfg.assistant.search_provider, self.cfg.assistant.tavily_api_key)
         if not results:
             return ("No search results were returned (the search backend may be "
                     "temporarily rate-limited). Try rephrasing or ask again.")

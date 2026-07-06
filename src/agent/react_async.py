@@ -65,6 +65,22 @@ _ANSWER_STOP = [
 # three sequential model calls.
 import re as _re
 
+# Matches an http/https URL anywhere in a message. Used so that when the user
+# pastes a link ("go to this page: https://..."), the program fetches THAT page
+# directly instead of sending the whole sentence to a search engine.
+_URL_RE = _re.compile(r"https?://[^\s<>\"')]+", _re.IGNORECASE)
+
+def _first_url(text: str) -> Optional[str]:
+    """Return the first http(s) URL in the text, or None. Trailing sentence
+    punctuation is trimmed so 'see https://x.com/page.' yields the clean URL."""
+    if not text:
+        return None
+    m = _URL_RE.search(text)
+    if not m:
+        return None
+    url = m.group(0).rstrip(".,;:!?)")
+    return url
+
 _TOOL_HINTS = (
     "http://", "https://", "www.", ".com", ".org", ".net", ".io",
     "search", "google", "look up", "lookup", "latest", "current",
@@ -124,68 +140,119 @@ class ReActAgent:
         }
 
     async def _web_would_help(self, user: str, scratch: str) -> bool:
-        """Ask the model a single, cheap yes/no: would answering this well
-        benefit from a current web search? This replaces brittle keyword lists
-        with the model's own judgment. It is a tiny generation (a few tokens),
-        so it adds little latency. On any parse ambiguity we default to True
-        when appropriate for the caller; here we return the model's yes/no and
-        let the caller decide what to do with it.
+        """Ask the model to classify the message as 1 (needs a live web search)
+        or 0 (answerable without one). The framing matters a lot for a small
+        model: we lead with the "answer locally" default, ask a concrete
+        question (does it need info that changes over time or that the model does
+        not already know), and give labeled examples on both sides so the model
+        pattern-matches instead of reasoning that "more info is always better"
+        (which made it answer 1 for even 'hello'). Output is a single digit.
 
-        Returns True for 'yes' (web would help), False for 'no'.
+        Returns True only when the model's first character is '1'; anything else
+        is treated as 0 (no search), so it errs toward answering directly.
         """
         today = _datetime.datetime.now().strftime("%A, %B %d, %Y")
         prompt = (
-            f"Today is {today}. Decide if answering the user's message well would "
-            f"benefit from a live web search (for current, recent, changing, or "
-            f"factual-lookup information you might not know or that may be out of "
-            f"date), or if it is small talk / general knowledge / about yourself "
-            f"that needs no web.\n"
-            f"Recent conversation (for context):\n{scratch or '(none)'}\n\n"
-            f"User message: {user}\n\n"
-            f"Answer with ONE word only: YES if a web search would help, NO if not."
+            f"Today is {today}. You are sorting one user message into 0 or 1.\n\n"
+            f"Answer 0 when the message can be handled from your own knowledge: "
+            f"greetings, chit-chat, opinions, math, writing help, coding, "
+            f"explanations of established concepts, or anything about you.\n"
+            f"Answer 1 ONLY when a good answer needs facts that change over time "
+            f"or that you would not reliably know: current events, news, prices, "
+            f"scores, weather, schedules, releases/versions, or who currently "
+            f"holds a role, or when the user explicitly asks you to search or "
+            f"look something up.\n\n"
+            f"Examples:\n"
+            f"hello -> 0\n"
+            f"how are you -> 0\n"
+            f"thanks -> 0\n"
+            f"what is 12 * 9 -> 0\n"
+            f"write me a haiku about rain -> 0\n"
+            f"explain how a car engine works -> 0\n"
+            f"who won the blazers game last night -> 1\n"
+            f"latest news on the election -> 1\n"
+            f"current price of bitcoin -> 1\n"
+            f"look this up for me -> 1\n\n"
+            f"Recent conversation (context only):\n{scratch or '(none)'}\n\n"
+            f"Message: {user}\n"
+            f"Answer (0 or 1):"
         )
         try:
-            txt = (await self.llm.generate_async(prompt, 4, 0.0)).strip().lower()
+            txt = (await self.llm.generate_async(prompt, 2, 0.0)).strip()
         except Exception as e:
-            print(f"[web?] classifier error: {type(e).__name__}: {e}; defaulting to NO")
+            print(f"[web?] classifier error: {type(e).__name__}: {e}; defaulting to 0 (NO)")
             return False
-        decision = txt.startswith("y")
-        print(f"[web?] would web help? -> {'YES' if decision else 'NO'} (model said {txt!r})")
+        # Strict: only a leading '1' counts as yes. Everything else -> no.
+        decision = txt[:1] == "1"
+        print(f"[web?] would web help? -> {'YES (1)' if decision else 'NO (0)'} (model said {txt!r})")
         return decision
 
     async def _answer_with_research(self, session_id: str, user: str, full_system_prompt: str,
                                     scratch: str, rag: str, cancel: asyncio.Event):
-        """Run the web research loop, then stream an answer grounded in the
-        results plus local knowledge. Enforced in code so the model cannot skip
-        the search. Degrades gracefully: if the search fails, is empty, or times
-        out, fall back to a local answer and say so, instead of hanging or
-        pretending it searched."""
+        """Get web content, then stream an answer grounded in it plus local
+        knowledge. Enforced in code so the model cannot skip or fake the lookup.
+
+        Two paths:
+          - If the message contains a URL, FETCH THAT PAGE DIRECTLY (fetch_url).
+            This is what "go to this page: https://..." needs; it does not touch
+            the search engine at all, so it works even when search is rate-limited.
+          - Otherwise, run the search-based research loop.
+
+        Degrades gracefully: on timeout / error / empty result, fall back to a
+        local answer and say so, instead of hanging or pretending it looked."""
+        budget = max(15, int(self.tools.cfg.assistant.tool_timeout_sec) + 10)
+        url = _first_url(user)
         obs = ""
         try:
-            # Bound the whole research step so slow/unresponsive internet cannot
-            # hang the turn. tool_timeout_sec is the per-tool cap; give research
-            # a little more since it does several fetches, but still bounded.
-            budget = max(15, int(self.tools.cfg.assistant.tool_timeout_sec) + 10)
-            obs = await asyncio.wait_for(
-                self.tools.call("research_web", {"query": user, "k": 4}),
-                timeout=budget,
-            )
-            print(f"[web?] research_web returned {len(obs)} chars; head={obs[:120]!r}")
+            if url:
+                # Direct fetch of the pasted link. Bypasses search entirely.
+                print(f"[web?] message has a URL -> fetching directly: {url}")
+                page = await asyncio.wait_for(
+                    self.tools.call("fetch_url", {"url": url}), timeout=budget)
+                if page and not page.startswith("[Blocked") and not page.startswith("[Error"):
+                    # Pull the passages most relevant to what the user asked, so
+                    # the answer step actually reads the page instead of ignoring
+                    # it. extract_relevant lives in the fetch module; reach it via
+                    # the tools' fetch import through a tiny local import to avoid
+                    # widening this module's imports.
+                    from ..internet.fetch import extract_relevant
+                    snippet = extract_relevant(page, user)
+                    obs = f"Fetched page: {url}\n{snippet}"
+                else:
+                    # Blocked/error: keep the status so we report honestly.
+                    obs = page or ""
+                print(f"[web?] fetch_url returned {len(obs)} chars; head={obs[:120]!r}")
+            else:
+                obs = await asyncio.wait_for(
+                    self.tools.call("research_web", {"query": user, "k": 4}), timeout=budget)
+                print(f"[web?] research_web returned {len(obs)} chars; head={obs[:120]!r}")
         except asyncio.TimeoutError:
             obs = ""
-            print("[web?] research_web timed out; falling back to local answer")
+            print("[web?] web step timed out; falling back to local answer")
         except Exception as e:
             obs = ""
-            print(f"[web?] research_web error: {type(e).__name__}: {e}; local fallback")
+            print(f"[web?] web step error: {type(e).__name__}: {e}; local fallback")
 
-        # Detect an unusable result (empty, rate-limited note, or all-blocked)
+        # Detect an unusable result (empty, rate-limited note, blocked, or error)
         # so we can tell the user honestly rather than dress up stale memory.
-        unusable = (not obs) or obs.strip().startswith("No search results")
+        stripped = obs.strip()
+        unusable = (
+            (not stripped)
+            or stripped.startswith("No search results")
+            or stripped.startswith("[Blocked")
+            or stripped.startswith("[Error")
+        )
         note = ""
         observations = "" if unusable else obs
         if unusable:
-            note = ("\n\n(Note: I could not reach the web just now, so this answer "
-                    "is from my local knowledge and may be out of date.)")
+            if url:
+                note = (f"\n\n(Note: I could not read {url} just now"
+                        + (f" - {stripped}" if stripped else "")
+                        + ". This answer is from my local knowledge and may be "
+                        "out of date.)")
+            else:
+                note = ("\n\n(Note: I could not reach the web just now, so this "
+                        "answer is from my local knowledge and may be out of date.)")
 
         full_answer = ""
         sys_with_ctx = full_system_prompt
