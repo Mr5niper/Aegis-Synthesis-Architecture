@@ -158,10 +158,11 @@ def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
         )
         gr.Markdown(
             "DuckDuckGo: no key, often rate-limited. "
-            "Tavily: free key at tavily.com (~1000/mo, no card), best for AI."
+            "Tavily: works with no key (rate-limited); add a free key from "
+            "tavily.com for higher limits."
         )
         tavily_key_box = gr.Textbox(
-            label="Tavily API key",
+            label="Tavily API key (optional - blank uses keyless mode)",
             value=cfg.assistant.tavily_api_key or "",
             type="password",
             placeholder="tvly-...",
