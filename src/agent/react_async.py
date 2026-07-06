@@ -140,42 +140,25 @@ class ReActAgent:
         }
 
     async def _web_would_help(self, user: str, scratch: str) -> bool:
-        """Ask the model to classify the message as 1 (needs a live web search)
-        or 0 (answerable without one). The framing matters a lot for a small
-        model: we lead with the "answer locally" default, ask a concrete
-        question (does it need info that changes over time or that the model does
-        not already know), and give labeled examples on both sides so the model
-        pattern-matches instead of reasoning that "more info is always better"
-        (which made it answer 1 for even 'hello'). Output is a single digit.
+        """Ask the model a single, cheap yes/no as a strict 1 or 0: would
+        answering this well benefit from a live web search? This replaces
+        brittle keyword lists with the model's own judgment, and demanding a
+        single digit keeps parsing unambiguous (a plain 'hello' should give 0).
 
         Returns True only when the model's first character is '1'; anything else
-        is treated as 0 (no search), so it errs toward answering directly.
+        (0, blank, or garbled output) is treated as NO, so it errs toward NOT
+        searching rather than searching on noise.
         """
         today = _datetime.datetime.now().strftime("%A, %B %d, %Y")
         prompt = (
-            f"Today is {today}. You are sorting one user message into 0 or 1.\n\n"
-            f"Answer 0 when the message can be handled from your own knowledge: "
-            f"greetings, chit-chat, opinions, math, writing help, coding, "
-            f"explanations of established concepts, or anything about you.\n"
-            f"Answer 1 ONLY when a good answer needs facts that change over time "
-            f"or that you would not reliably know: current events, news, prices, "
-            f"scores, weather, schedules, releases/versions, or who currently "
-            f"holds a role, or when the user explicitly asks you to search or "
-            f"look something up.\n\n"
-            f"Examples:\n"
-            f"hello -> 0\n"
-            f"how are you -> 0\n"
-            f"thanks -> 0\n"
-            f"what is 12 * 9 -> 0\n"
-            f"write me a haiku about rain -> 0\n"
-            f"explain how a car engine works -> 0\n"
-            f"who won the blazers game last night -> 1\n"
-            f"latest news on the election -> 1\n"
-            f"current price of bitcoin -> 1\n"
-            f"look this up for me -> 1\n\n"
-            f"Recent conversation (context only):\n{scratch or '(none)'}\n\n"
-            f"Message: {user}\n"
-            f"Answer (0 or 1):"
+            f"Today is {today}. Decide whether answering the user's message well "
+            f"would need a live web search (for current, recent, changing, or "
+            f"factual-lookup information that may be out of date), as opposed to "
+            f"small talk, general knowledge, or a question about yourself.\n"
+            f"Recent conversation (for context):\n{scratch or '(none)'}\n\n"
+            f"User message: {user}\n\n"
+            f"Respond with a single character and nothing else: 1 if a web search "
+            f"is needed, or 0 if it is not. Answer:"
         )
         try:
             txt = (await self.llm.generate_async(prompt, 2, 0.0)).strip()
@@ -210,14 +193,24 @@ class ReActAgent:
                 page = await asyncio.wait_for(
                     self.tools.call("fetch_url", {"url": url}), timeout=budget)
                 if page and not page.startswith("[Blocked") and not page.startswith("[Error"):
-                    # Pull the passages most relevant to what the user asked, so
-                    # the answer step actually reads the page instead of ignoring
-                    # it. extract_relevant lives in the fetch module; reach it via
-                    # the tools' fetch import through a tiny local import to avoid
-                    # widening this module's imports.
-                    from ..internet.fetch import extract_relevant
-                    snippet = extract_relevant(page, user)
-                    obs = f"Fetched page: {url}\n{snippet}"
+                    # For a SINGLE fetched page, do NOT aggressively keyword-trim
+                    # it: that is what silently discarded the answer before (e.g.
+                    # asking "what year did it come out" scored zero against a
+                    # page whose label reads "Publication date", so the old
+                    # extract_relevant returned the page header/nav and the date
+                    # was never shown to the model). The model has a large
+                    # context and is far better than a word-count heuristic at
+                    # finding the asked-for detail, so hand it a big slice of the
+                    # page and let it read. We still cap the size so we never
+                    # blow the context or stall. (The multi-result research loop
+                    # still uses extract_relevant per page, since it cannot fit
+                    # several full pages.)
+                    PAGE_CHARS = 6000
+                    body = page[:PAGE_CHARS]
+                    truncated = " [page truncated]" if len(page) > PAGE_CHARS else ""
+                    obs = (f"Fetched page: {url}\n"
+                           f"Full page text below; find the specific detail the "
+                           f"user asked about.{truncated}\n\n{body}")
                 else:
                     # Blocked/error: keep the status so we report honestly.
                     obs = page or ""
