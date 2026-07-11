@@ -155,8 +155,19 @@ def build_answer_messages(system: str, history: list, rag: str, observations: st
     if rag:
         sys_content += "\n\nKnowledge context:\n" + rag
     if observations:
-        sys_content += ("\n\nTool observations (use these for your answer; cite "
-                        "URLs when present):\n" + observations)
+        # LLM guidance (stays in the system block; NOT moved into the user turn).
+        # At answer time the model had "forgotten" it has web tools and would
+        # disclaim ("I can't view a page") even after a successful fetch. Mirror
+        # the router's existing "the tools are your web access" line here so the
+        # model knows this content is real and answers from it. Deliberately does
+        # NOT tell it to treat results as authoritative/current -- it just says
+        # "you fetched this, use what's relevant", leaving the judgment to the LLM.
+        sys_content += ("\n\nYou have live web tools and just used them to fetch "
+                        "the content below, so you are not answering from memory "
+                        "here: do not say you cannot access the internet, browse, "
+                        "or view a page -- you already retrieved this. Read it and "
+                        "answer the user's question using whatever in it is "
+                        "relevant, citing URLs when present:\n" + observations)
     messages = [{"role": "system", "content": sys_content}]
     # Prior conversation turns, if any, so the template frames real multi-turn.
     for turn in (history or []):
