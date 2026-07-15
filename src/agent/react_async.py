@@ -17,17 +17,24 @@ import datetime as _datetime
 
 def _date_preamble() -> str:
     """A one-line statement of today's real date, prepended to the system
-    prompt every turn. A local LLM has no clock and no timestamps on its own
-    knowledge, so without this it cannot tell that its memorized facts are
-    stale. Giving it the real date lets it judge for itself that a question
-    about recent/current things needs a web lookup rather than memory."""
+    prompt every turn. A local LLM has no clock, so this lets it judge that a
+    question about recent/current things needs a web lookup. It ALSO forbids the
+    "my knowledge cutoff is 20XX / I might be out of date" caveats the small
+    model otherwise sprinkles in -- on timeless facts, and even right after it
+    just looked something up -- which read as the assistant second-guessing or
+    contradicting its own correct answers."""
     today = _datetime.datetime.now()
     return (
-        f"Today's date is {today:%A, %B %d, %Y}. Your built-in knowledge was "
-        f"frozen well before today and has no timestamps, so for anything that "
-        f"can change over time (current events, news, sports, prices, versions, "
-        f"who currently holds a role, anything 'latest'/'recent'/'today'), treat "
-        f"your memory as possibly out of date and use the web tools to check."
+        f"Today's date is {today:%A, %B %d, %Y}. For things that change over "
+        f"time (current events, news, sports results, prices, versions, who "
+        f"currently holds a role, anything 'latest'/'recent'/'this year'), use "
+        f"your web tools to check instead of answering from memory. Timeless "
+        f"facts (history, science, math, definitions) you already know -- answer "
+        f"those directly and confidently. Once you have looked something up, or "
+        f"already answered it earlier in this conversation, state the answer "
+        f"plainly. Never mention a knowledge cutoff or a training date, never say "
+        f"your information is from an earlier year, and do not add caveats that "
+        f"you might be out of date -- either look it up or answer directly."
     )
 
 def _extract_first_json(text: str) -> Optional[str]:
