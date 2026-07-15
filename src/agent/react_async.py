@@ -188,7 +188,7 @@ class ReActAgent:
         return decision
 
     async def _answer_with_research(self, session_id: str, user: str, full_system_prompt: str,
-                                    scratch: str, rag: str, cancel: asyncio.Event):
+                                    history: list, rag: str, cancel: asyncio.Event):
         """Get web content, then stream an answer grounded in it plus local
         knowledge. Enforced in code so the model cannot skip or fake the lookup.
 
@@ -275,10 +275,11 @@ class ReActAgent:
                         "answer is from my local knowledge and may be out of date.)")
 
         full_answer = ""
-        sys_with_ctx = full_system_prompt
-        if scratch:
-            sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
-        messages = build_answer_messages(sys_with_ctx, [], rag, observations, user)
+        # Prior conversation as REAL chat turns (build_answer_messages threads
+        # them), not flattened into the system prompt, so the model attends to it
+        # and can refer back to what it already pulled. Same recent window the
+        # search-decision classifier reads, so the two stay in sync.
+        messages = build_answer_messages(full_system_prompt, history, rag, observations, user)
         async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1,
                                                      stop=_ANSWER_STOP, cancel_event=cancel):
             full_answer += tok
@@ -326,7 +327,8 @@ class ReActAgent:
         profile_prompt = self.profile.get_system_prompt_addon()
         style_prompt = self.style_adapter.get_adapted_prompt_prefix()
         full_system_prompt = f"{_date_preamble()} {self.system_prompt} {profile_prompt} {style_prompt}".strip()
-        scratch = self.mem.get_recent_context(session_id)
+        scratch = self.mem.get_recent_context(session_id)   # flat text: the web-need classifier reads this
+        history = self.mem.get_recent_turns(session_id)      # same window as real chat turns: the reply model reads this
 
         # DECIDE WITH JUDGMENT, NOT KEYWORDS: ask the model a single cheap yes/no
         # -- would a live web search help answer this? This replaces the old
@@ -350,7 +352,7 @@ class ReActAgent:
                 # model answers from the results (it cannot skip the search).
                 print("[web?] web allowed -> running research directly")
                 async for tok in self._answer_with_research(
-                        session_id, user, full_system_prompt, scratch, rag, cancel):
+                        session_id, user, full_system_prompt, history, rag, cancel):
                     yield tok
                 return
             else:
@@ -359,10 +361,7 @@ class ReActAgent:
                 # next turn resumes via resumed_from_consent above.
                 print("[web?] web would help but access is restricted -> local answer + consent ask")
                 full_answer = ""
-                sys_with_ctx = full_system_prompt
-                if scratch:
-                    sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
-                messages = build_answer_messages(sys_with_ctx, [], rag, "", user)
+                messages = build_answer_messages(full_system_prompt, history, rag, "", user)
                 async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1,
                                                             stop=_ANSWER_STOP, cancel_event=cancel):
                     full_answer += tok
@@ -503,15 +502,11 @@ class ReActAgent:
         profile_prompt = self.profile.get_system_prompt_addon()
         style_prompt = self.style_adapter.get_adapted_prompt_prefix()
         full_system_prompt = f"{_date_preamble()} {self.system_prompt} {profile_prompt} {style_prompt}".strip()
-        # Include only recent conversation for continuity; no RAG/observations.
-        scratch = self.mem.get_recent_context(session_id)
-        # Fold prior-conversation context into the system message; the current
-        # user message is a proper chat turn. Uses the model native chat
-        # template so it stops at its own end-of-turn token.
-        sys_with_ctx = full_system_prompt
-        if scratch:
-            sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
-        messages = build_answer_messages(sys_with_ctx, [], "", "", user)
+        # Recent conversation as REAL chat turns for continuity (not flattened
+        # into the system prompt, where the small model skimmed it), so it can
+        # refer back to what was already said; same window the classifier reads.
+        history = self.mem.get_recent_turns(session_id)
+        messages = build_answer_messages(full_system_prompt, history, "", "", user)
         full_answer = ""
         async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
             full_answer += tok
