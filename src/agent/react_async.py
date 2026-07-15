@@ -187,6 +187,52 @@ class ReActAgent:
         print(f"[web?] would web help? -> {'YES (1)' if decision else 'NO (0)'} (model said {txt!r})")
         return decision
 
+    async def _build_query(self, user: str, history: list) -> str:
+        """Turn the user's LATEST message into a single standalone web search
+        query. The model writes it itself, resolving references ('it', 'that',
+        'they', 'the last game') against the RECENT conversation, so a follow-up
+        searches the actual subject rather than its literal words (e.g. "look it
+        up" -> "2026 NBA Finals Game 4 result" instead of the phrase "look it up").
+        This is the assistant deciding what to look up FOR the user.
+
+        Guardrails against the old query-rewriter's failure mode:
+          - only the last few turns are used as context (not the whole history),
+            so it cannot pull in an unrelated earlier topic and mash them together;
+          - the model is told the query is about the LATEST message and to use the
+            conversation only to resolve references;
+          - it must output ONLY the query; and
+          - if the result is empty, over-long, or a non-query, we fall back to the
+            raw message -- so a bad rewrite can never make search worse than before.
+        """
+        recent = ""
+        if history:
+            tail = [t for t in history[-6:] if t.get("content")]
+            recent = "\n".join(f"{t['role']}: {t['content']}" for t in tail)
+        prompt = (
+            "Turn the user's latest message into ONE web search query that will "
+            "find what they are asking for right now. Use the recent conversation "
+            "ONLY to resolve references (like 'it', 'that', 'they', 'the last "
+            "game'); the query is about the LATEST message. Keep it to a few "
+            "keywords. Output ONLY the query -- no quotes, no label, no "
+            "explanation.\n\n"
+            f"Recent conversation:\n{recent or '(none)'}\n\n"
+            f"Latest message: {user}\n"
+            "Search query:"
+        )
+        try:
+            q = (await self.llm.generate_async(prompt, 40, 0.0)).strip()
+        except Exception as e:  # noqa: BLE001
+            print(f"[web?] query-build error: {type(e).__name__}: {e}; using raw message")
+            q = ""
+        q = (q.splitlines()[0] if q else "").strip()
+        for lead in ("search query:", "search:", "query:"):   # strip an echoed label
+            if q.lower().startswith(lead):
+                q = q[len(lead):].strip()
+        q = q.strip('"').strip("'").strip("`").strip()
+        if (not q) or len(q) > 120 or q.lower() in ("none", "n/a", "search query", "query"):
+            q = user  # fall back to the raw message; never worse than before
+        return q
+
     async def _answer_with_research(self, session_id: str, user: str, full_system_prompt: str,
                                     history: list, rag: str, cancel: asyncio.Event):
         """Get web content, then stream an answer grounded in it plus local
@@ -233,8 +279,13 @@ class ReActAgent:
                     obs = page or ""
                 print(f"[web?] fetch_url returned {len(obs)} chars; head={obs[:120]!r}")
             else:
+                # The model writes the search query itself from the conversation,
+                # so a follow-up searches the right SUBJECT (see _build_query). If
+                # it cannot form a good one it falls back to the raw message.
+                search_query = await self._build_query(user, history)
+                print(f"[web?] search query (from conversation): {search_query!r}")
                 obs = await asyncio.wait_for(
-                    self.tools.call("research_web", {"query": user, "k": 4}), timeout=budget)
+                    self.tools.call("research_web", {"query": search_query, "k": 4}), timeout=budget)
                 print(f"[web?] research_web returned {len(obs)} chars; head={obs[:120]!r}")
         except asyncio.TimeoutError:
             obs = ""
