@@ -129,6 +129,7 @@ def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
             label="Allow all sites (no domain restriction)",
             value=start_allow_all,
             interactive=start_enabled,
+            elem_classes="web-dependent",
         )
         # 3a. Allowed-domains list (editable only when web is enabled AND
         # allow-all is off).
@@ -138,6 +139,7 @@ def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
             lines=6,
             placeholder="github.com\nraw.githubusercontent.com\nwikipedia.org",
             interactive=start_enabled and not start_allow_all,
+            elem_classes="web-dependent",
         )
 
         # Persist helper for the allow-all switch + domain list. Saves the
@@ -179,6 +181,7 @@ def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
             value=start_provider,
             show_label=False,
             interactive=start_enabled,
+            elem_classes="web-dependent",
         )
         gr.Markdown(
             "Tavily: works with no key (rate-limited); add a free key from "
@@ -191,6 +194,7 @@ def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
             placeholder="tvly-...",
             interactive=start_enabled,
             visible=(start_provider == "Tavily"),
+            elem_classes="web-dependent",
         )
 
         # Save provider + key together; a failure is printed, not swallowed.
@@ -324,6 +328,13 @@ def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contact
     *:focus-visible { outline-color: #2563eb !important; }
     input[type=range] { accent-color: #2563eb !important; }
     input[type=checkbox], input[type=radio] { accent-color: #2563eb !important; }
+    /* Web Access: a dependent control (Allow all sites, domains, provider, key)
+       must LOOK disabled when the master switch is off (or a sub-rule disables
+       it). opacity + grayscale is theme-neutral (reads as disabled in light,
+       dark, and system) and also overrides the forced-blue accent above, so a
+       disabled checkbox/radio shows grey instead of blue and its label dims. */
+    .web-dependent:has(:disabled) { opacity: 0.45 !important; filter: grayscale(1) !important; }
+    .web-dependent:has(:disabled) * { cursor: not-allowed !important; }
     """
     
     with gr.Blocks(theme=aegis_theme, title="Aegis Synthesis", css=custom_css) as demo:
