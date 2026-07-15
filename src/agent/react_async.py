@@ -17,17 +17,24 @@ import datetime as _datetime
 
 def _date_preamble() -> str:
     """A one-line statement of today's real date, prepended to the system
-    prompt every turn. A local LLM has no clock and no timestamps on its own
-    knowledge, so without this it cannot tell that its memorized facts are
-    stale. Giving it the real date lets it judge for itself that a question
-    about recent/current things needs a web lookup rather than memory."""
+    prompt every turn. A local LLM has no clock, so this lets it judge that a
+    question about recent/current things needs a web lookup. It ALSO forbids the
+    "my knowledge cutoff is 20XX / I might be out of date" caveats the small
+    model otherwise sprinkles in -- on timeless facts, and even right after it
+    just looked something up -- which read as the assistant second-guessing or
+    contradicting its own correct answers."""
     today = _datetime.datetime.now()
     return (
-        f"Today's date is {today:%A, %B %d, %Y}. Your built-in knowledge was "
-        f"frozen well before today and has no timestamps, so for anything that "
-        f"can change over time (current events, news, sports, prices, versions, "
-        f"who currently holds a role, anything 'latest'/'recent'/'today'), treat "
-        f"your memory as possibly out of date and use the web tools to check."
+        f"Today's date is {today:%A, %B %d, %Y}. For things that change over "
+        f"time (current events, news, sports results, prices, versions, who "
+        f"currently holds a role, anything 'latest'/'recent'/'this year'), use "
+        f"your web tools to check instead of answering from memory. Timeless "
+        f"facts (history, science, math, definitions) you already know -- answer "
+        f"those directly and confidently. Once you have looked something up, or "
+        f"already answered it earlier in this conversation, state the answer "
+        f"plainly. Never mention a knowledge cutoff or a training date, never say "
+        f"your information is from an earlier year, and do not add caveats that "
+        f"you might be out of date -- either look it up or answer directly."
     )
 
 def _extract_first_json(text: str) -> Optional[str]:
@@ -187,8 +194,58 @@ class ReActAgent:
         print(f"[web?] would web help? -> {'YES (1)' if decision else 'NO (0)'} (model said {txt!r})")
         return decision
 
+    async def _build_query(self, user: str, history: list) -> str:
+        """Turn the user's LATEST message into a single standalone web search
+        query. The model writes it itself, resolving references ('it', 'that',
+        'they', 'the last game') against the RECENT conversation, so a follow-up
+        searches the actual subject rather than its literal words (e.g. "look it
+        up" -> "2026 NBA Finals Game 4 result" instead of the phrase "look it up").
+        This is the assistant deciding what to look up FOR the user.
+
+        Guardrails against the old query-rewriter's failure mode:
+          - only the last few turns are used as context (not the whole history),
+            so it cannot pull in an unrelated earlier topic and mash them together;
+          - the model is told the query is about the LATEST message and to use the
+            conversation only to resolve references;
+          - it must output ONLY the query; and
+          - if the result is empty, over-long, or a non-query, we fall back to the
+            raw message -- so a bad rewrite can never make search worse than before.
+        """
+        recent = ""
+        if history:
+            tail = [t for t in history[-6:] if t.get("content")]
+            recent = "\n".join(f"{t['role']}: {t['content']}" for t in tail)
+        now = _datetime.datetime.now()
+        prompt = (
+            f"Today is {now:%A, %B %d, %Y}. Turn the user's latest message into "
+            "ONE web search query that will find what they are asking for right "
+            "now. Use the recent conversation ONLY to resolve references (like "
+            "'it', 'that', 'they', 'the last game'); the query is about the "
+            "LATEST message. If it is about something current or most-recent (who "
+            f"won, latest, current, newest, this season's), put the year {now:%Y} "
+            "in the query so the results are up to date, not from an earlier year. "
+            "Keep it to a few keywords. Output ONLY the query -- no quotes, no "
+            "label, no explanation.\n\n"
+            f"Recent conversation:\n{recent or '(none)'}\n\n"
+            f"Latest message: {user}\n"
+            "Search query:"
+        )
+        try:
+            q = (await self.llm.generate_async(prompt, 40, 0.0)).strip()
+        except Exception as e:  # noqa: BLE001
+            print(f"[web?] query-build error: {type(e).__name__}: {e}; using raw message")
+            q = ""
+        q = (q.splitlines()[0] if q else "").strip()
+        for lead in ("search query:", "search:", "query:"):   # strip an echoed label
+            if q.lower().startswith(lead):
+                q = q[len(lead):].strip()
+        q = q.strip('"').strip("'").strip("`").strip()
+        if (not q) or len(q) > 120 or q.lower() in ("none", "n/a", "search query", "query"):
+            q = user  # fall back to the raw message; never worse than before
+        return q
+
     async def _answer_with_research(self, session_id: str, user: str, full_system_prompt: str,
-                                    scratch: str, rag: str, cancel: asyncio.Event):
+                                    history: list, rag: str, cancel: asyncio.Event):
         """Get web content, then stream an answer grounded in it plus local
         knowledge. Enforced in code so the model cannot skip or fake the lookup.
 
@@ -233,8 +290,13 @@ class ReActAgent:
                     obs = page or ""
                 print(f"[web?] fetch_url returned {len(obs)} chars; head={obs[:120]!r}")
             else:
+                # The model writes the search query itself from the conversation,
+                # so a follow-up searches the right SUBJECT (see _build_query). If
+                # it cannot form a good one it falls back to the raw message.
+                search_query = await self._build_query(user, history)
+                print(f"[web?] search query (from conversation): {search_query!r}")
                 obs = await asyncio.wait_for(
-                    self.tools.call("research_web", {"query": user, "k": 4}), timeout=budget)
+                    self.tools.call("research_web", {"query": search_query, "k": 4}), timeout=budget)
                 print(f"[web?] research_web returned {len(obs)} chars; head={obs[:120]!r}")
         except asyncio.TimeoutError:
             obs = ""
@@ -275,10 +337,11 @@ class ReActAgent:
                         "answer is from my local knowledge and may be out of date.)")
 
         full_answer = ""
-        sys_with_ctx = full_system_prompt
-        if scratch:
-            sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
-        messages = build_answer_messages(sys_with_ctx, [], rag, observations, user)
+        # Prior conversation as REAL chat turns (build_answer_messages threads
+        # them), not flattened into the system prompt, so the model attends to it
+        # and can refer back to what it already pulled. Same recent window the
+        # search-decision classifier reads, so the two stay in sync.
+        messages = build_answer_messages(full_system_prompt, history, rag, observations, user)
         async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1,
                                                      stop=_ANSWER_STOP, cancel_event=cancel):
             full_answer += tok
@@ -326,7 +389,8 @@ class ReActAgent:
         profile_prompt = self.profile.get_system_prompt_addon()
         style_prompt = self.style_adapter.get_adapted_prompt_prefix()
         full_system_prompt = f"{_date_preamble()} {self.system_prompt} {profile_prompt} {style_prompt}".strip()
-        scratch = self.mem.get_recent_context(session_id)
+        scratch = self.mem.get_recent_context(session_id)   # flat text: the web-need classifier reads this
+        history = self.mem.get_recent_turns(session_id)      # same window as real chat turns: the reply model reads this
 
         # DECIDE WITH JUDGMENT, NOT KEYWORDS: ask the model a single cheap yes/no
         # -- would a live web search help answer this? This replaces the old
@@ -350,7 +414,7 @@ class ReActAgent:
                 # model answers from the results (it cannot skip the search).
                 print("[web?] web allowed -> running research directly")
                 async for tok in self._answer_with_research(
-                        session_id, user, full_system_prompt, scratch, rag, cancel):
+                        session_id, user, full_system_prompt, history, rag, cancel):
                     yield tok
                 return
             else:
@@ -359,10 +423,7 @@ class ReActAgent:
                 # next turn resumes via resumed_from_consent above.
                 print("[web?] web would help but access is restricted -> local answer + consent ask")
                 full_answer = ""
-                sys_with_ctx = full_system_prompt
-                if scratch:
-                    sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
-                messages = build_answer_messages(sys_with_ctx, [], rag, "", user)
+                messages = build_answer_messages(full_system_prompt, history, rag, "", user)
                 async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1,
                                                             stop=_ANSWER_STOP, cancel_event=cancel):
                     full_answer += tok
@@ -503,15 +564,11 @@ class ReActAgent:
         profile_prompt = self.profile.get_system_prompt_addon()
         style_prompt = self.style_adapter.get_adapted_prompt_prefix()
         full_system_prompt = f"{_date_preamble()} {self.system_prompt} {profile_prompt} {style_prompt}".strip()
-        # Include only recent conversation for continuity; no RAG/observations.
-        scratch = self.mem.get_recent_context(session_id)
-        # Fold prior-conversation context into the system message; the current
-        # user message is a proper chat turn. Uses the model native chat
-        # template so it stops at its own end-of-turn token.
-        sys_with_ctx = full_system_prompt
-        if scratch:
-            sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
-        messages = build_answer_messages(sys_with_ctx, [], "", "", user)
+        # Recent conversation as REAL chat turns for continuity (not flattened
+        # into the system prompt, where the small model skimmed it), so it can
+        # refer back to what was already said; same window the classifier reads.
+        history = self.mem.get_recent_turns(session_id)
+        messages = build_answer_messages(full_system_prompt, history, "", "", user)
         full_answer = ""
         async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
             full_answer += tok
