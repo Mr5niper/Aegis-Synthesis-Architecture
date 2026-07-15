@@ -22,7 +22,7 @@ There are two ways to use Aegis:
 - Private by design: conversations and data are stored locally on your PC.
 - RAG knowledge base with semantic search, and a consent-based memory system
   that asks before saving facts about you.
-- Web search on demand, limited to sites you allow in the settings file.
+- Web access you control from the app: off until you turn it on, then a choice of search provider (Tavily works with no key) and either all sites or a domain allow list you set.
 - Optional proactive suggestions and secure peer-to-peer collaboration
   (both off by default).
 - Runs as a single Windows executable, or from source on Windows, macOS, or
@@ -119,7 +119,7 @@ Things to try:
 
 - "Hello"
 - "What is 23 * 456?"
-- "What is the latest stable version of Python?" (it can search the web)
+- "What is the latest stable version of Python?" (turn on web access, then it can search the web)
 - "Remember that my favorite color is blue" (it asks before saving facts)
 
 ### Two models
@@ -152,8 +152,9 @@ in the `data` folder on your PC, and nothing is sent to any company.
 The only time Aegis reaches the internet on its own is:
 
 - the one-time model download on first run, and
-- web searches, but only when you ask a question that needs current information,
-  and only to the sites allowed in `config.yaml`.
+- web searches, but only when web access is turned on (it is off at each start),
+  only when a question needs current information, and only to the sites you allow
+  in the Web Access panel.
 
 ## Troubleshooting
 

@@ -207,7 +207,7 @@ Main chat area: the conversation, the message box, and the Send/Stop/Clear/Expor
 Right sidebar:
 - Suggestions: output from the proactive agents, with a "Use Last Suggestion" button. (Proactive agents are off by default; see below.)
 - Models: switch between "default" (faster) and "large" (more capable). The dropdown shows the active model.
-- Web Access: turn on "Allow all sites" or edit the allowed-domains list. Changes save automatically.
+- Web Access: turn on "Enable web access" (the master switch, off at each start) to let Aegis use the internet, then either allow all sites or edit the allowed-domains list, and pick a search provider (Tavily works with no key). Changes save automatically.
 - Memory Inbox: approve facts before they are stored.
 - Collaboration Requests: for multi-device use; can be ignored on a single device.
 - Contacts and Identity: for secure peer-to-peer features.
