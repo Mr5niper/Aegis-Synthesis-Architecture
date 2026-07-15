@@ -6,6 +6,7 @@ from typing import List, Tuple
 class PolicyManager:
     allow_web_search: bool = True; proactive_enabled: bool = True
     allow_domains: List[str] = field(default_factory=list)
+    allow_all_web: bool = False
     quiet_hours: Tuple[int,int] = (23, 7); suggestions_per_min: int = 6
     _history: List[float] = field(default_factory=list, repr=False)
 
@@ -20,4 +21,6 @@ class PolicyManager:
         self._history.append(now); return True
 
     def domain_allowed(self, hostname: str) -> bool:
+        if self.allow_all_web:
+            return True
         return not self.allow_domains or any(hostname.endswith(d) or hostname == d for d in self.allow_domains)

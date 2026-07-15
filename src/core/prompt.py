@@ -1,7 +1,8 @@
 # Tool descriptions shown to the router so the model knows WHAT each tool does
 # and WHEN to use it. Keep this in sync with AsyncToolRegistry.
 TOOL_DESCRIPTIONS = {
-    "search_web": "Search the live internet for current, factual, or recent information (news, prices, releases, people, events, anything that may have changed or that you are unsure about). args: {\"query\": \"...\", \"k\": 5}",
+    "search_web": "Search the live internet and get a list of result links with short snippets. Use when you just need to find pages. args: {\"query\": \"...\", \"k\": 5}",
+    "research_web": "Search the web AND read the top results, returning what each source says with its URL. Use this for most 'look it up' / 'search online' / current-info questions, because it finds the answer and the source in one step. args: {\"query\": \"...\", \"k\": 4}",
     "fetch_url": "Download and read the text of a specific web page. args: {\"url\": \"https://...\"}",
     "ingest_url": "Download a web page and store it in the knowledge base for later. args: {\"url\": \"https://...\"}",
     "calc": "Evaluate a arithmetic expression exactly. args: {\"expr\": \"23 * 456\"}",
@@ -28,13 +29,31 @@ User: What is 19% of 240?
 { "tool": "calc", "args": { "expr": "240 * 0.19" }, "rationale": "Exact arithmetic." }
 
 User: Who won the F1 race last weekend?
-{ "tool": "search_web", "args": { "query": "F1 race winner last weekend", "k": 5 }, "rationale": "Recent event, needs live info." }
+{ "tool": "research_web", "args": { "query": "F1 race winner last weekend", "k": 4 }, "rationale": "Recent event; find it and read the sources." }
 
 User: What's the latest stable version of Python?
-{ "tool": "search_web", "args": { "query": "latest stable Python version", "k": 5 }, "rationale": "Version info changes over time." }
+{ "tool": "research_web", "args": { "query": "latest stable Python version", "k": 4 }, "rationale": "Version info changes; look it up and cite." }
 
 User: Summarize what's on this page https://example.com/post
 { "tool": "fetch_url", "args": { "url": "https://example.com/post" }, "rationale": "Need the page contents." }
+
+User: you have web access can you check espn.com
+{ "tool": "fetch_url", "args": { "url": "https://espn.com" }, "rationale": "User asked me to read a specific site; add https:// to the bare domain." }
+
+User: can you look at what's on wikipedia.org about otters
+{ "tool": "search_web", "args": { "query": "otters site:wikipedia.org", "k": 5 }, "rationale": "Named site plus a topic; search it live." }
+
+User: check the news on cnn.com
+{ "tool": "fetch_url", "args": { "url": "https://cnn.com" }, "rationale": "User named a site to read; fetch it." }
+
+User: who did the Portland Trail Blazers just trade for?
+{ "tool": "research_web", "args": { "query": "Portland Trail Blazers latest trade 2026", "k": 4 }, "rationale": "Recent event; my memory is not current, look it up." }
+
+User: what's the newest iPhone?
+{ "tool": "research_web", "args": { "query": "newest iPhone model", "k": 4 }, "rationale": "Product lineup changes; verify online." }
+
+User: search online for that
+{ "tool": "research_web", "args": { "query": "<the topic from the recent conversation>", "k": 4 }, "rationale": "User explicitly asked to search." }
 
 User: What time is it?
 { "tool": "now", "args": {}, "rationale": "Needs the current clock." }
@@ -63,17 +82,31 @@ def react_step_prompt(system: str, tools_list: list[str], scratchpad: str, user:
         f"You can call ONE tool to help answer the user. Available tools:\n"
         f"{_tool_menu(tools_list)}\n\n"
         f"{TOOLS_SCHEMA}\n\n"
-        f"Guidance: Most messages need NO tool. For greetings, small talk, "
-        f"questions about yourself (your name, your purpose, what you can do), "
-        f"opinions, explanations, writing, or anything you can answer from what you "
-        f"already know, you MUST choose \"none\" and answer directly. Never use "
-        f"kb_add or kb_query for simple conversational questions; the knowledge base "
-        f"is only for information the user explicitly asked you to store or look up.\n"
-        f"Only use a tool when the question genuinely requires one: search_web for "
-        f"current events, recent facts, prices, versions, or people you are not "
-        f"certain about; calc for arithmetic; now for the current time; fetch_url "
-        f"for a specific page. If in doubt for a conversational message, choose "
-        f"\"none\".\n\n"
+        f"Guidance: Your built-in knowledge is FROZEN at training time and is "
+        f"NOT up to date. For anything that could have changed or happened "
+        f"recently - current events, news, sports scores or trades, prices, "
+        f"stock quotes, software versions, 'latest' or 'current' or 'today' or "
+        f"'this year', who currently holds a role, or 'who just did X' - you do "
+        f"NOT know the answer from memory and you MUST use research_web to look "
+        f"it up. Do not answer these from memory and do not say you searched "
+        f"unless a tool result is actually present in the observations. If you "
+        f"are not certain your memorized answer is still correct today, use "
+        f"research_web.\n"
+        f"For genuinely timeless things - greetings, small talk, questions about "
+        f"yourself, opinions, explanations, definitions, math, writing - choose "
+        f"\"none\" and answer directly. Never use kb_add or kb_query for simple "
+        f"conversational questions; the knowledge base is only for information "
+        f"the user explicitly asked you to store or look up.\n"
+        f"Tool choice: research_web for most 'look it up' / 'search online' / "
+        f"current-info questions (it searches and reads the top results so you "
+        f"can answer with a source); search_web if you only need a list of "
+        f"links; calc for arithmetic; now for the current time; fetch_url for "
+        f"one specific page. When the user names a website or asks you to check, "
+        f"open, read, or look at a site (even a bare domain like \"espn.com\"), "
+        f"you DO have web access through these tools: use fetch_url for that "
+        f"page (add \"https://\" to a bare domain), or research_web if they name "
+        f"a site plus a topic. Never reply that you cannot access the internet "
+        f"or a website; the tools above are your web access.\n\n"
         f"{ROUTER_EXAMPLES}\n\n"
         f"Conversation and observations so far:\n{scratchpad}\n\n"
         f"User: {user}\n"
@@ -122,8 +155,19 @@ def build_answer_messages(system: str, history: list, rag: str, observations: st
     if rag:
         sys_content += "\n\nKnowledge context:\n" + rag
     if observations:
-        sys_content += ("\n\nTool observations (use these for your answer; cite "
-                        "URLs when present):\n" + observations)
+        # LLM guidance (stays in the system block; NOT moved into the user turn).
+        # At answer time the model had "forgotten" it has web tools and would
+        # disclaim ("I can't view a page") even after a successful fetch. Mirror
+        # the router's existing "the tools are your web access" line here so the
+        # model knows this content is real and answers from it. Deliberately does
+        # NOT tell it to treat results as authoritative/current -- it just says
+        # "you fetched this, use what's relevant", leaving the judgment to the LLM.
+        sys_content += ("\n\nYou have live web tools and just used them to fetch "
+                        "the content below, so you are not answering from memory "
+                        "here: do not say you cannot access the internet, browse, "
+                        "or view a page -- you already retrieved this. Read it and "
+                        "answer the user's question using whatever in it is "
+                        "relevant, citing URLs when present:\n" + observations)
     messages = [{"role": "system", "content": sys_content}]
     # Prior conversation turns, if any, so the template frames real multi-turn.
     for turn in (history or []):

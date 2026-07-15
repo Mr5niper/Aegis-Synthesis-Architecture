@@ -8,10 +8,36 @@ class ModelConfig(BaseModel):
     url: str; path: str; sha256: str = ""; ctx_size: int = 4096; n_gpu_layers: int = 0
 
 class AssistantConfig(BaseModel):
-    system_prompt: str; max_reasoning_steps: int = 5; allow_web_search: bool = True
+    system_prompt: str; max_reasoning_steps: int = 5
+    # Web-access MASTER switch. This is deliberately SESSION-ONLY and is FORCED
+    # OFF at every startup (see load_config / save_config below), no matter what
+    # is on disk. Aegis is isolated-AI-first: it must always boot with the web
+    # OFF, even if you left it on when you closed. You turn it on in the Web
+    # Access panel for the current run only; the next launch is off again. Every
+    # OTHER web setting (allow_all_web, the domain list, the provider, the key)
+    # DOES persist, so enabling this returns to exactly the prior state.
+    allow_web_search: bool = False
     tool_timeout_sec: int = 20; proactive_enabled: bool = True
     quiet_hours: Tuple[int, int] = (23, 7); suggestions_per_min: int = 5
     allow_domains: List[str] = Field(default_factory=list)
+    # Master switch for web reading. When True, the assistant may open ANY site
+    # and the allow_domains list is ignored (but preserved for when this is
+    # turned back off). When False, only allow_domains (and subdomains) may be
+    # opened. This is the checkbox in the Web Access panel; it is the single
+    # thing that decides the mode, independent of what the domain list contains.
+    allow_all_web: bool = False
+    # Which search backend research_web uses. "tavily" is the default because it
+    # works out of the box in keyless mode (no key needed, rate-limited) and is
+    # far more reliable than keyless DuckDuckGo, which aggressively rate-limits
+    # automated queries. Setting tavily_api_key raises the limits. "duckduckgo"
+    # is the keyless alternative. Only one is active at a time (chosen in the Web
+    # Access panel). Add providers by extending search.py and this value; nothing
+    # else in the flow changes.
+    search_provider: str = "tavily"
+    # API key for Tavily (https://tavily.com), used only when search_provider is
+    # "tavily". Optional: blank runs Tavily in keyless mode (rate-limited, no
+    # signup). A free key (~1000 searches/month, no credit card) raises limits.
+    tavily_api_key: str = ""
     distill_facts: bool = False  # run a fact-extraction generation after each full-pipeline turn; off by default to save one model call per message (the fast path never distills regardless)
     allow_code_exec: bool = False
 
@@ -58,7 +84,14 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     path = resolve_config_path(path)
     with open(path, "r") as f:
         data = yaml.safe_load(f)
-    return AppConfig(**data)
+    cfg = AppConfig(**data)
+    # ISOLATED-AI-FIRST: web access ALWAYS starts OFF, on every launch, no
+    # matter what the file says. This is intentional and non-negotiable: even if
+    # the user left it on when they closed (and a stray 'true' is on disk), the
+    # program boots with the web disabled. The user re-enables it per session in
+    # the Web Access panel. Every other web setting is loaded/persisted normally.
+    cfg.assistant.allow_web_search = False
+    return cfg
 
 def save_config(cfg: AppConfig, path: str = "config.yaml") -> str:
     """Write the config back to YAML, to the same file load_config reads.
@@ -78,6 +111,16 @@ def save_config(cfg: AppConfig, path: str = "config.yaml") -> str:
             data["assistant"]["quiet_hours"] = list(qh)
     except Exception:
         pass
+    # ISOLATED-AI-FIRST: never persist the web-access master switch as on. The
+    # on-disk value is always False so the file never implies the web will start
+    # enabled (load_config forces it off regardless, but this keeps the saved
+    # file honest and prevents a stray 'true' from ever lingering). This only
+    # rewrites the value being WRITTEN; the live in-memory cfg is untouched, so a
+    # session the user turned on stays on until they close.
+    try:
+        data["assistant"]["allow_web_search"] = False
+    except Exception:
+        pass
     with open(path, "w") as f:
         yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True, default_flow_style=False)
     return path
@@ -85,18 +128,66 @@ def save_config(cfg: AppConfig, path: str = "config.yaml") -> str:
 def update_web_access(cfg: AppConfig, policy, allow_all: bool, domains: List[str], path: str = "config.yaml") -> str:
     """Apply web-access settings live and persist them.
 
-    allow_all=True is represented as an EMPTY allow_domains list, which both the
-    policy and the fetch layer already treat as "allow any domain". Otherwise the
-    provided domain list is used. The list is mutated IN PLACE on cfg so the
-    already-constructed tool registry (which reads cfg.assistant.allow_domains at
-    call time) sees the change immediately, and the policy copy is updated too.
-    Returns the saved file path.
+    allow_all is the MASTER SWITCH (the Web Access checkbox):
+      - True  -> the assistant may open any site; the domain list is ignored but
+                 still saved so it returns intact when allow_all is turned off.
+      - False -> only the domains in the list (and their subdomains) may open.
+
+    The domain list is ALWAYS saved as given, regardless of allow_all, so it is
+    never lost. Values are mutated IN PLACE on cfg so the already-constructed
+    tool registry (which reads cfg.assistant at call time) sees the change
+    immediately, and the policy copy is updated too. Returns the saved path.
     """
-    cleaned = [] if allow_all else _clean_domains(domains)
+    cleaned = _clean_domains(domains)
     # Mutate in place (do not rebind) so shared references stay valid.
+    cfg.assistant.allow_all_web = bool(allow_all)
     cfg.assistant.allow_domains[:] = cleaned
     if policy is not None:
-        policy.allow_domains = cleaned
+        # Keep the policy in sync. When allow_all is on, the effective allow list
+        # is "any" (empty); otherwise it is the cleaned list. The fetch layer
+        # also checks allow_all_web directly, so this is belt-and-suspenders.
+        policy.allow_domains = [] if allow_all else cleaned
+        try:
+            policy.allow_all_web = bool(allow_all)
+        except Exception:
+            pass
+    return save_config(cfg, path)
+
+def update_web_enabled(cfg: AppConfig, policy, enabled: bool, path: str = "config.yaml") -> str:
+    """Apply and persist the web-access MASTER switch (allow_web_search).
+
+    This is the TOP-LEVEL control, above 'Allow all sites'. When False, the
+    agent performs no web activity at all: it does not run the web-need
+    classifier, does not resume any pending web consent, and calls no web tool
+    (the tools themselves also refuse while it is off). All the other web
+    settings (Allow all sites, the domain list, the provider, the key) are left
+    untouched so they return to their exact prior state when this is turned back
+    on. Set in place on cfg so the already-constructed tool registry and agent
+    (which read cfg.assistant at call time) see the change immediately. The
+    policy copy is kept in sync too. Returns the saved path.
+    """
+    cfg.assistant.allow_web_search = bool(enabled)
+    if policy is not None:
+        try:
+            policy.allow_web_search = bool(enabled)
+        except Exception:
+            pass
+    return save_config(cfg, path)
+
+def update_search_provider(cfg: AppConfig, provider: str, tavily_api_key: str, path: str = "config.yaml") -> str:
+    """Apply and persist the search-provider choice and Tavily key.
+
+    provider is normalized to a known value ("duckduckgo" or "tavily"); anything
+    unrecognized falls back to "tavily" (keyless) so the app always has a working
+    keyless default. The Tavily key is trimmed. Values are set in place on cfg so
+    the already-constructed tool registry (which reads cfg.assistant at call
+    time) picks up the change immediately. Returns the saved path.
+    """
+    p = (provider or "").strip().lower()
+    if p not in ("duckduckgo", "tavily"):
+        p = "tavily"
+    cfg.assistant.search_provider = p
+    cfg.assistant.tavily_api_key = (tavily_api_key or "").strip()
     return save_config(cfg, path)
 
 def _clean_domains(domains: List[str]) -> List[str]:

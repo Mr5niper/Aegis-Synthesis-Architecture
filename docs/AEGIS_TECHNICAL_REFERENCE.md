@@ -1,6 +1,6 @@
 # Aegis Synthesis Architecture - Technical Reference Manual
 
-**Version:** 1.3.0.0  
+**Version:** 1.4.0.0  
 **Date:** July 2026  
 
 ---
@@ -44,6 +44,7 @@ ASA is designed for privacy, reliability, and extensibility. It treats a single 
 
 ### Chat Assistant
 - Local LLM with async token streaming, cancellation, and tool-use via JSON schema
+- Model-judged web access: a master switch (off each session) gates all internet use; when it is on, the model decides per message whether a live lookup is needed, writes its own date-aware search query from the conversation, and grounds answers in fetched page text
 
 ### RAG System
 - Lite SQLite vector store
@@ -110,8 +111,8 @@ ASA is designed for privacy, reliability, and extensibility. It treats a single 
 - `session_tools.py`: Session-sharing helpers (kept minimal)
 
 #### Internet (`src/internet`)
-- `search.py`: DuckDuckGo search
-- `fetch.py`: Robust HTML fetch/clean with allowlist gating
+- `search.py`: web search with a selectable provider (Tavily or DuckDuckGo); Tavily is the default and runs keyless (no API key), with an optional key for higher limits
+- `fetch.py`: Robust HTML fetch/clean with allowlist gating; a single fetched page is handed to the model as a large slice of real text rather than a keyword-trimmed passage
 - `cache.py`: SQLite-based response cache (WAL enabled)
 
 #### Mesh (`src/mesh`)
@@ -185,6 +186,19 @@ ASA is designed for privacy, reliability, and extensibility. It treats a single 
      - Returns observation
      - Observations appended; loop continues (bounded by `max_reasoning_steps`)
    - If final answer, stream tokens to UI; store transcript and optionally distill facts into Memory Inbox
+
+### 5.1.1 Web Access and Search Decision
+
+Web access is governed by a master switch (`allow_web_search`) that is off at every startup and is session only, so the assistant is isolated-first on each run. While it is off the orchestrator runs no web-need check, resumes no consent, and calls no web tool.
+
+While web access is on:
+
+1. The model is given today's real date and judges, as a strict 0 or 1, whether the message needs a live lookup (current or changeable facts, or an explicit request to search). Anything that is not a leading 1 is treated as no, so plain chit-chat is answered locally.
+2. If a lookup is warranted and the message contains a URL, that page is fetched directly (bypassing search) and a large slice of its real text is grounded into the answer.
+3. Otherwise the model writes a standalone search query from the recent conversation, resolving references and adding the current year for current questions; the top results are fetched concurrently within the tool timeout; and a numbered, source-attributed digest is assembled.
+4. The fetched content is placed in the system block as material the model just retrieved, so it answers from it and cites sources rather than claiming it cannot reach the internet. A timed-out or blocked lookup falls back to a local answer with an honest note.
+
+With "Allow all sites" off, only the configured domain allowlist is readable and the assistant asks once per session before its first search. Recent conversation is threaded to the reply model as real chat turns, so a follow-up can refer back to what was already fetched instead of searching again.
 
 ### 5.2 Proactive Agents
 
@@ -329,7 +343,7 @@ python build_executable.py
 
 - `config.yaml` drives:
   - **models**: list with name/path/url/ctx_size/n_gpu_layers
-  - **assistant**: system behavior (max steps, proactive, timeouts, allowlist, allow_code_exec)
+  - **assistant**: system behavior (max steps, proactive, timeouts, allow_code_exec) and web access (`allow_web_search` master switch, `allow_all_web`, `allow_domains` allowlist, `search_provider` Tavily or DuckDuckGo, `tavily_api_key` blank for keyless)
   - **user_profile**, learning paths
   - **paths** for all SQLite DBs
 - At startup:
@@ -559,7 +573,7 @@ This document should be sufficient to build, operate, extend, and reason about t
 **Document Information:**
 
 **Title:** Aegis Synthesis Architecture - Technical Reference Manual  
-**Version:** 1.3.0.0  
+**Version:** 1.4.0.0  
 **Date:** July 2026  
 
 ---
