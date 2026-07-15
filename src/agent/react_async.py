@@ -13,6 +13,30 @@ from ..memory.inbox import MemoryInbox
 from ..core.user_profile import UserProfile
 from ..learning.style_adapter import StyleAdapter
 
+import datetime as _datetime
+
+def _date_preamble() -> str:
+    """A one-line statement of today's real date, prepended to the system
+    prompt every turn. A local LLM has no clock, so this lets it judge that a
+    question about recent/current things needs a web lookup. It ALSO forbids the
+    "my knowledge cutoff is 20XX / I might be out of date" caveats the small
+    model otherwise sprinkles in -- on timeless facts, and even right after it
+    just looked something up -- which read as the assistant second-guessing or
+    contradicting its own correct answers."""
+    today = _datetime.datetime.now()
+    return (
+        f"Today's date is {today:%A, %B %d, %Y}. For things that change over "
+        f"time (current events, news, sports results, prices, versions, who "
+        f"currently holds a role, anything 'latest'/'recent'/'this year'), use "
+        f"your web tools to check instead of answering from memory. Timeless "
+        f"facts (history, science, math, definitions) you already know -- answer "
+        f"those directly and confidently. Once you have looked something up, or "
+        f"already answered it earlier in this conversation, state the answer "
+        f"plainly. Never mention a knowledge cutoff or a training date, never say "
+        f"your information is from an earlier year, and do not add caveats that "
+        f"you might be out of date -- either look it up or answer directly."
+    )
+
 def _extract_first_json(text: str) -> Optional[str]:
     start = text.find("{")
     if start == -1: return None
@@ -47,6 +71,22 @@ _ANSWER_STOP = [
 # distillation. This is what makes a plain "hello" fast instead of running
 # three sequential model calls.
 import re as _re
+
+# Matches an http/https URL anywhere in a message. Used so that when the user
+# pastes a link ("go to this page: https://..."), the program fetches THAT page
+# directly instead of sending the whole sentence to a search engine.
+_URL_RE = _re.compile(r"https?://[^\s<>\"')]+", _re.IGNORECASE)
+
+def _first_url(text: str) -> Optional[str]:
+    """Return the first http(s) URL in the text, or None. Trailing sentence
+    punctuation is trimmed so 'see https://x.com/page.' yields the clean URL."""
+    if not text:
+        return None
+    m = _URL_RE.search(text)
+    if not m:
+        return None
+    url = m.group(0).rstrip(".,;:!?)")
+    return url
 
 _TOOL_HINTS = (
     "http://", "https://", "www.", ".com", ".org", ".net", ".io",
@@ -101,13 +141,233 @@ class ReActAgent:
         t = (msg or "").strip().lower().rstrip(".!")
         return t in {
             "yes", "y", "yeah", "yep", "yes please", "ok", "okay", "sure",
-            "go", "go ahead", "do it", "search", "search it", "look it up",
-            "please do", "proceed", "fine", "yes go ahead", "go for it",
+            "go", "go ahead", "do it", "do that", "yes do that", "search",
+            "search it", "look it up", "please do", "proceed", "fine",
+            "yes go ahead", "go for it",
         }
+
+    async def _web_would_help(self, user: str, scratch: str) -> bool:
+        """Ask the model a single, cheap yes/no as a strict 1 or 0: would
+        answering this well benefit from a live web search? This replaces
+        brittle keyword lists with the model's own judgment, and demanding a
+        single digit keeps parsing unambiguous (a plain 'hello' should give 0).
+
+        Returns True only when the model's first character is '1'; anything else
+        (0, blank, or garbled output) is treated as NO, so it errs toward NOT
+        searching rather than searching on noise.
+        """
+        today = _datetime.datetime.now().strftime("%A, %B %d, %Y")
+        prompt = (
+            f"Today is {today}. You are sorting one user message into 0 or 1.\n\n"
+            f"Answer 0 when the message can be handled from your own knowledge: "
+            f"greetings, chit-chat, opinions, math, writing help, coding, "
+            f"explanations of established concepts, or anything about you.\n"
+            f"Answer 1 ONLY when a good answer needs facts that change over time "
+            f"or that you would not reliably know: current events, news, prices, "
+            f"scores, weather, schedules, releases/versions, or who currently "
+            f"holds a role, or when the user explicitly asks you to search or "
+            f"look something up.\n\n"
+            f"Examples:\n"
+            f"hello -> 0\n"
+            f"how are you -> 0\n"
+            f"thanks -> 0\n"
+            f"what's your name -> 0\n"
+            f"what is 12 * 9 -> 0\n"
+            f"write me a haiku about rain -> 0\n"
+            f"explain how a car engine works -> 0\n"
+            f"who won the blazers game last night -> 1\n"
+            f"latest news on the election -> 1\n"
+            f"current price of bitcoin -> 1\n"
+            f"what's the newest iphone -> 1\n"
+            f"look this up for me -> 1\n\n"
+            f"Recent conversation (context only):\n{scratch or '(none)'}\n\n"
+            f"Message: {user}\n"
+            f"Answer (0 or 1):"
+        )
+        try:
+            txt = (await self.llm.generate_async(prompt, 2, 0.0)).strip()
+        except Exception as e:
+            print(f"[web?] classifier error: {type(e).__name__}: {e}; defaulting to 0 (NO)")
+            return False
+        # Strict: only a leading '1' counts as yes. Everything else -> no.
+        decision = txt[:1] == "1"
+        print(f"[web?] would web help? -> {'YES (1)' if decision else 'NO (0)'} (model said {txt!r})")
+        return decision
+
+    async def _build_query(self, user: str, history: list) -> str:
+        """Turn the user's LATEST message into a single standalone web search
+        query. The model writes it itself, resolving references ('it', 'that',
+        'they', 'the last game') against the RECENT conversation, so a follow-up
+        searches the actual subject rather than its literal words (e.g. "look it
+        up" -> "2026 NBA Finals Game 4 result" instead of the phrase "look it up").
+        This is the assistant deciding what to look up FOR the user.
+
+        Guardrails against the old query-rewriter's failure mode:
+          - only the last few turns are used as context (not the whole history),
+            so it cannot pull in an unrelated earlier topic and mash them together;
+          - the model is told the query is about the LATEST message and to use the
+            conversation only to resolve references;
+          - it must output ONLY the query; and
+          - if the result is empty, over-long, or a non-query, we fall back to the
+            raw message -- so a bad rewrite can never make search worse than before.
+        """
+        recent = ""
+        if history:
+            tail = [t for t in history[-6:] if t.get("content")]
+            recent = "\n".join(f"{t['role']}: {t['content']}" for t in tail)
+        now = _datetime.datetime.now()
+        prompt = (
+            f"Today is {now:%A, %B %d, %Y}. Turn the user's latest message into "
+            "ONE web search query that will find what they are asking for right "
+            "now. Use the recent conversation ONLY to resolve references (like "
+            "'it', 'that', 'they', 'the last game'); the query is about the "
+            "LATEST message. If it is about something current or most-recent (who "
+            f"won, latest, current, newest, this season's), put the year {now:%Y} "
+            "in the query so the results are up to date, not from an earlier year. "
+            "Keep it to a few keywords. Output ONLY the query -- no quotes, no "
+            "label, no explanation.\n\n"
+            f"Recent conversation:\n{recent or '(none)'}\n\n"
+            f"Latest message: {user}\n"
+            "Search query:"
+        )
+        try:
+            q = (await self.llm.generate_async(prompt, 40, 0.0)).strip()
+        except Exception as e:  # noqa: BLE001
+            print(f"[web?] query-build error: {type(e).__name__}: {e}; using raw message")
+            q = ""
+        q = (q.splitlines()[0] if q else "").strip()
+        for lead in ("search query:", "search:", "query:"):   # strip an echoed label
+            if q.lower().startswith(lead):
+                q = q[len(lead):].strip()
+        q = q.strip('"').strip("'").strip("`").strip()
+        if (not q) or len(q) > 120 or q.lower() in ("none", "n/a", "search query", "query"):
+            q = user  # fall back to the raw message; never worse than before
+        return q
+
+    async def _answer_with_research(self, session_id: str, user: str, full_system_prompt: str,
+                                    history: list, rag: str, cancel: asyncio.Event):
+        """Get web content, then stream an answer grounded in it plus local
+        knowledge. Enforced in code so the model cannot skip or fake the lookup.
+
+        Two paths:
+          - If the message contains a URL, FETCH THAT PAGE DIRECTLY (fetch_url).
+            This is what "go to this page: https://..." needs; it does not touch
+            the search engine at all, so it works even when search is rate-limited.
+          - Otherwise, run the search-based research loop.
+
+        Degrades gracefully: on timeout / error / empty result, fall back to a
+        local answer and say so, instead of hanging or pretending it looked."""
+        budget = max(15, int(self.tools.cfg.assistant.tool_timeout_sec) + 10)
+        url = _first_url(user)
+        obs = ""
+        try:
+            if url:
+                # Direct fetch of the pasted link. Bypasses search entirely.
+                print(f"[web?] message has a URL -> fetching directly: {url}")
+                page = await asyncio.wait_for(
+                    self.tools.call("fetch_url", {"url": url}), timeout=budget)
+                if page and not page.startswith("[Blocked") and not page.startswith("[Error"):
+                    # For a SINGLE fetched page, do NOT aggressively keyword-trim
+                    # it: that is what silently discarded the answer before (e.g.
+                    # asking "what year did it come out" scored zero against a
+                    # page whose label reads "Publication date", so the old
+                    # extract_relevant returned the page header/nav and the date
+                    # was never shown to the model). The model has a large
+                    # context and is far better than a word-count heuristic at
+                    # finding the asked-for detail, so hand it a big slice of the
+                    # page and let it read. We still cap the size so we never
+                    # blow the context or stall. (The multi-result research loop
+                    # still uses extract_relevant per page, since it cannot fit
+                    # several full pages.)
+                    PAGE_CHARS = 6000
+                    body = page[:PAGE_CHARS]
+                    truncated = " [page truncated]" if len(page) > PAGE_CHARS else ""
+                    obs = (f"Fetched page: {url}\n"
+                           f"Full page text below; find the specific detail the "
+                           f"user asked about.{truncated}\n\n{body}")
+                else:
+                    # Blocked/error: keep the status so we report honestly.
+                    obs = page or ""
+                print(f"[web?] fetch_url returned {len(obs)} chars; head={obs[:120]!r}")
+            else:
+                # The model writes the search query itself from the conversation,
+                # so a follow-up searches the right SUBJECT (see _build_query). If
+                # it cannot form a good one it falls back to the raw message.
+                search_query = await self._build_query(user, history)
+                print(f"[web?] search query (from conversation): {search_query!r}")
+                obs = await asyncio.wait_for(
+                    self.tools.call("research_web", {"query": search_query, "k": 4}), timeout=budget)
+                print(f"[web?] research_web returned {len(obs)} chars; head={obs[:120]!r}")
+        except asyncio.TimeoutError:
+            obs = ""
+            print("[web?] web step timed out; falling back to local answer")
+        except Exception as e:
+            obs = ""
+            print(f"[web?] web step error: {type(e).__name__}: {e}; local fallback")
+
+        # Detect an unusable result (empty, rate-limited note, blocked, or error)
+        # so we can tell the user honestly rather than dress up stale memory.
+        # NOTE: tool-level failures from the registry come back as plain
+        # "Error: ..." (e.g. "Error: tool 'research_web' timed out",
+        # "Error executing ...") WITHOUT the leading bracket, and a disabled tool
+        # returns "Access disabled ...". These must count as unusable too --
+        # otherwise a timed-out search was handed to the model as if it were real
+        # web content, and the model quietly answered from stale memory with no
+        # honest note. Match those forms as well as the bracketed ones.
+        stripped = obs.strip()
+        unusable = (
+            (not stripped)
+            or stripped.startswith("No search results")
+            or stripped.startswith("[Blocked")
+            or stripped.startswith("[Error")
+            or stripped.startswith("Error:")
+            or stripped.startswith("Error executing")
+            or stripped.startswith("Access disabled")
+        )
+        note = ""
+        observations = "" if unusable else obs
+        if unusable:
+            if url:
+                note = (f"\n\n(Note: I could not read {url} just now"
+                        + (f" - {stripped}" if stripped else "")
+                        + ". This answer is from my local knowledge and may be "
+                        "out of date.)")
+            else:
+                note = ("\n\n(Note: I could not reach the web just now, so this "
+                        "answer is from my local knowledge and may be out of date.)")
+
+        full_answer = ""
+        # Prior conversation as REAL chat turns (build_answer_messages threads
+        # them), not flattened into the system prompt, so the model attends to it
+        # and can refer back to what it already pulled. Same recent window the
+        # search-decision classifier reads, so the two stay in sync.
+        messages = build_answer_messages(full_system_prompt, history, rag, observations, user)
+        async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1,
+                                                     stop=_ANSWER_STOP, cancel_event=cancel):
+            full_answer += tok
+            yield tok
+        if note:
+            yield note
+            full_answer += note
+        self.mem.add_message(session_id, user, full_answer, context=observations)
+        await self._maybe_distill_facts(user, full_answer)
 
     async def run(self, session_id: str, user: str, cancel: asyncio.Event) -> AsyncGenerator[str, None]:
         # 1. Update style model based on user input
         self.style_adapter.analyze_message(user)
+
+        # WEB ACCESS MASTER SWITCH (top-level, above 'Allow all sites'): when
+        # off, the assistant touches the web in NO way. It does not run the
+        # web-need classifier, does not resume any pending web consent, and calls
+        # no web tool -- it answers purely from local knowledge. Enforced here in
+        # the program so the model never even attempts a lookup. Read live from
+        # cfg so toggling it in the UI takes effect on the very next turn.
+        if not bool(self.tools.cfg.assistant.allow_web_search):
+            self._pending_web.pop(session_id, None)  # drop any stale consent ask
+            print("[web?] web access master OFF -> local answer only (no web attempted)")
+            async for tok in self._fast_answer(session_id, user, cancel):
+                yield tok
+            return
 
         # CONSENT REPLY: if this session is waiting on a yes/no for web-search
         # consent (asked once when 'Allow all sites' is OFF) and the user just
@@ -125,22 +385,67 @@ class ReActAgent:
                 resumed_from_consent = True
             # else: fall through and treat the new message normally.
 
-        # FAST PATH: for short, clearly-conversational messages (greetings, small
-        # talk, brief questions with no tool hints) skip the routing call, RAG
-        # retrieval, and fact distillation entirely and stream a single answer.
-        # This turns a plain "hello" from three sequential model calls into one.
-        # A question resumed after web-search consent must NOT take the fast path
-        # (that would skip the search the user just approved).
-        if not resumed_from_consent and not _needs_full_pipeline(user):
-            async for tok in self._fast_answer(session_id, user, cancel):
-                yield tok
-            return
+        # 2. Contextual system prompt parts, needed by every branch below.
+        profile_prompt = self.profile.get_system_prompt_addon()
+        style_prompt = self.style_adapter.get_adapted_prompt_prefix()
+        full_system_prompt = f"{_date_preamble()} {self.system_prompt} {profile_prompt} {style_prompt}".strip()
+        scratch = self.mem.get_recent_context(session_id)   # flat text: the web-need classifier reads this
+        history = self.mem.get_recent_turns(session_id)      # same window as real chat turns: the reply model reads this
 
+        # DECIDE WITH JUDGMENT, NOT KEYWORDS: ask the model a single cheap yes/no
+        # -- would a live web search help answer this? This replaces the old
+        # keyword gate. The PROGRAM then controls what happens based on the
+        # answer and the web-access setting, so the model never gets to silently
+        # refuse to search.
+        #   - resumed_from_consent means the user already said 'yes' to searching
+        #     a prior question, so we skip the classifier and go straight to
+        #     research.
+        web_helps = resumed_from_consent or await self._web_would_help(user, scratch)
+
+        if web_helps:
+            # RAG/personal facts still enrich the grounded answer.
+            rag = await asyncio.get_event_loop().run_in_executor(None, self.kb.retrieve_context, user, 3)
+            facts = self.graph.facts_for_prompt(8)
+            if facts:
+                rag = (rag + "\n\nPersonal facts:\n" + facts).strip()
+
+            if self.tools.web_open() or session_id in self._web_consent or resumed_from_consent:
+                # Web is allowed: the program runs the research directly and the
+                # model answers from the results (it cannot skip the search).
+                print("[web?] web allowed -> running research directly")
+                async for tok in self._answer_with_research(
+                        session_id, user, full_system_prompt, history, rag, cancel):
+                    yield tok
+                return
+            else:
+                # Web is restricted ('Allow all sites' off) and no consent yet:
+                # answer locally first, then ask one-time consent. On 'yes' the
+                # next turn resumes via resumed_from_consent above.
+                print("[web?] web would help but access is restricted -> local answer + consent ask")
+                full_answer = ""
+                messages = build_answer_messages(full_system_prompt, history, rag, "", user)
+                async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1,
+                                                            stop=_ANSWER_STOP, cancel_event=cancel):
+                    full_answer += tok
+                    yield tok
+                warning = self.tools.consent_warning()
+                yield warning
+                self._pending_web[session_id] = user
+                self.mem.add_message(session_id, user, full_answer + warning, context="")
+                return
+
+        # web_helps == False: no web needed. Fast local answer (one generation).
+        print("[web?] no web needed -> fast local answer")
+        async for tok in self._fast_answer(session_id, user, cancel):
+            yield tok
+        return
+
+    async def _run_legacy_react(self, session_id: str, user: str, cancel: asyncio.Event) -> AsyncGenerator[str, None]:
         # 2. Get contextual system prompt parts (full ReAct path below).
         profile_prompt = self.profile.get_system_prompt_addon()
         style_prompt = self.style_adapter.get_adapted_prompt_prefix()
 
-        full_system_prompt = f"{self.system_prompt} {profile_prompt} {style_prompt}".strip()
+        full_system_prompt = f"{_date_preamble()} {self.system_prompt} {profile_prompt} {style_prompt}".strip()
 
         scratch = self.mem.get_recent_context(session_id)
         rag = await asyncio.get_event_loop().run_in_executor(None, self.kb.retrieve_context, user, 3)
@@ -167,6 +472,15 @@ class ReActAgent:
             if js:
                 try: call = ToolCall.model_validate(json.loads(js))
                 except ValidationError: pass
+
+            # Visibility: print what the router decided so failures are diagnosable
+            # from the console instead of guessed at. Shows the chosen tool (or
+            # 'none'/unparsed) and the raw router text when nothing parsed.
+            if call and call.tool != "none":
+                print(f"[route] step {step}: tool={call.tool} args={call.args}")
+            else:
+                _parsed = "none" if (call and call.tool == "none") else "UNPARSED"
+                print(f"[route] step {step}: {_parsed} (no tool) :: router said: {route_text.strip()[:160]!r}")
 
             if not call or call.tool == "none":
                 full_answer = ""
@@ -227,6 +541,7 @@ class ReActAgent:
                 return
 
             obs = await self.tools.call(call.tool, call.args)
+            print(f"[route] ran {call.tool}: {len(obs)} chars returned; head={obs[:120]!r}")
             observations.append(f"{call.tool} -> {obs[:800]}")
             scratch += f"\nAssistant: {json.dumps(call.model_dump(exclude_none=True))}\nObservation: {obs}"
 
@@ -248,16 +563,12 @@ class ReActAgent:
         distillation. Still records the turn so conversation history is intact."""
         profile_prompt = self.profile.get_system_prompt_addon()
         style_prompt = self.style_adapter.get_adapted_prompt_prefix()
-        full_system_prompt = f"{self.system_prompt} {profile_prompt} {style_prompt}".strip()
-        # Include only recent conversation for continuity; no RAG/observations.
-        scratch = self.mem.get_recent_context(session_id)
-        # Fold prior-conversation context into the system message; the current
-        # user message is a proper chat turn. Uses the model native chat
-        # template so it stops at its own end-of-turn token.
-        sys_with_ctx = full_system_prompt
-        if scratch:
-            sys_with_ctx = full_system_prompt + "\n\nRecent conversation:\n" + scratch
-        messages = build_answer_messages(sys_with_ctx, [], "", "", user)
+        full_system_prompt = f"{_date_preamble()} {self.system_prompt} {profile_prompt} {style_prompt}".strip()
+        # Recent conversation as REAL chat turns for continuity (not flattened
+        # into the system prompt, where the small model skimmed it), so it can
+        # refer back to what was already said; same window the classifier reads.
+        history = self.mem.get_recent_turns(session_id)
+        messages = build_answer_messages(full_system_prompt, history, "", "", user)
         full_answer = ""
         async for tok in self.llm.stream_chat_async(messages, 512, 0.6, 0.9, 40, 1.1, stop=_ANSWER_STOP, cancel_event=cancel):
             full_answer += tok

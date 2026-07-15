@@ -23,3 +23,23 @@ class ConversationMemory:
         c.execute("SELECT user, assistant FROM conversations WHERE session_id=? ORDER BY id DESC LIMIT ?", (session_id, n))
         pairs = reversed(c.fetchall())
         return "\n\n".join([f"User: {u}\nAssistant: {a}" for u, a in pairs])
+
+    def get_recent_turns(self, session_id: str, n: int = 6) -> list:
+        """Same recent window as get_recent_context, but as chat-style turns:
+        [{'role':'user','content':...},{'role':'assistant','content':...}, ...],
+        oldest first. The reply model reads THIS (so prior turns -- including the
+        assistant's own earlier answers, which hold whatever was looked up -- are
+        seen as real dialogue it can refer back to), while the search-decision
+        classifier reads get_recent_context. Both come from the same rows and the
+        same n, so the decider and the conversation stay in sync. Empty fields are
+        skipped so a malformed row cannot inject a blank turn."""
+        c = self.conn.cursor()
+        c.execute("SELECT user, assistant FROM conversations WHERE session_id=? ORDER BY id DESC LIMIT ?", (session_id, n))
+        rows = list(reversed(c.fetchall()))
+        turns = []
+        for u, a in rows:
+            if u:
+                turns.append({"role": "user", "content": u})
+            if a:
+                turns.append({"role": "assistant", "content": a})
+        return turns

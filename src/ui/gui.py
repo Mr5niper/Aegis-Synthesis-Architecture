@@ -13,7 +13,7 @@ from .consent import ConsentBroker
 from ..learning.lora_trainer import LoRATrainer
 from ..learning.style_adapter import StyleAdapter
 from ..__version__ import get_version_info # Added for versioning
-from ..core.config import update_web_access, AppConfig
+from ..core.config import update_web_access, update_search_provider, update_web_enabled, AppConfig
 AUDIT_FILE = Path("data/user_data/inbox_approved.jsonl")
 def _inbox_choices(inbox: MemoryInbox):
     return [(f"{s} {r} {d}", i) for i, s, r, d in inbox.list_pending()]
@@ -82,74 +82,171 @@ def mount_training_viewer(root_blocks: gr.Blocks, trainer: LoRATrainer):
         refresh_btn.click(update_status, outputs=[status_text, script_text])
         root_blocks.load(update_status, outputs=[status_text, script_text])      
 def mount_web_access(root_blocks: gr.Blocks, cfg: "AppConfig", policy):
-    """Panel to view/edit which web domains the assistant may fetch.
+    """Panel to view/edit web access.
 
-    Two modes:
-      - Allow all sites: represented internally as an EMPTY allow list, which
-        the policy and fetch layer treat as "no restriction".
-      - Restrict to a list: only the listed domains (and their subdomains) may
-        be fetched.
+    THREE levels of control, top to bottom:
 
-    Settings apply and save the moment they change; there is no Save button and
-    no status box. The domains textbox is the source of truth for the list and
-    is never cleared by toggling Allow-all: turning Allow-all on only disables
-    the box (its text is kept), and turning it off re-enables the same list.
-    (Internally, Allow-all is stored as an empty list in config.yaml, but the
-    box keeps showing your domains so they return intact when you switch back.)
+      1. 'Enable web access' (allow_web_search) -- the MASTER switch. When off,
+         Aegis does no web activity at all (it does not even run the web-need
+         classifier) and every control below is greyed out but keeps its value,
+         so flipping it back on restores the exact prior state.
+
+      2. 'Allow all sites' (allow_all_web) -- when on, any site may be opened and
+         the domain list is ignored (but preserved); when off, only the listed
+         domains (and subdomains) may be opened.
+
+      3. The allowed-domains list and the search provider (+ optional Tavily
+         key).
+
+    All changes save immediately; a failed save is printed to the console
+    instead of being silently swallowed.
     """
     current = list(cfg.assistant.allow_domains or [])
-    start_allow_all = len(current) == 0
+    start_enabled = bool(cfg.assistant.allow_web_search)
+    start_allow_all = bool(cfg.assistant.allow_all_web)
+    _prov_label = {"duckduckgo": "DuckDuckGo", "tavily": "Tavily"}
+    start_provider = _prov_label.get(
+        (cfg.assistant.search_provider or "tavily").lower(), "Tavily")
 
     with gr.Accordion("Web Access", open=False):
         gr.Markdown(
-            "Control which websites Aegis may open when it searches or fetches a "
-            "page. Turn on **Allow all sites** for unrestricted access, or leave "
-            "it off and list the allowed domains (one per line, e.g. `github.com`). "
-            "Subdomains are included automatically. Changes save automatically."
+            "Turn **Enable web access** off to stop Aegis using the internet "
+            "entirely (it will answer only from local knowledge and will not even "
+            "try to look anything up). With it on, use **Allow all sites** to let "
+            "it open any site, or turn that off to restrict it to the domains you "
+            "list (one per line, e.g. `github.com`; subdomains included). Changes "
+            "save automatically."
         )
+
+        # 1. MASTER SWITCH.
+        enable_web_cb = gr.Checkbox(
+            label="Enable web access (master switch)",
+            value=start_enabled,
+        )
+
+        # 2. Allow-all switch (greyed unless web is enabled).
         allow_all_cb = gr.Checkbox(
             label="Allow all sites (no domain restriction)",
             value=start_allow_all,
+            interactive=start_enabled,
         )
+        # 3a. Allowed-domains list (editable only when web is enabled AND
+        # allow-all is off).
         domains_box = gr.Textbox(
             label="Allowed domains (one per line)",
             value="\n".join(current),
             lines=6,
             placeholder="github.com\nraw.githubusercontent.com\nwikipedia.org",
-            interactive=not start_allow_all,
+            interactive=start_enabled and not start_allow_all,
         )
 
-        # Persisting helper. Always saves the CURRENT textbox contents as the
-        # list, regardless of the Allow-all state, so the list is never lost.
-        # When Allow-all is on, update_web_access stores an empty list in config
-        # (its representation of "allow any"), but we leave the textbox text
-        # untouched so the domains reappear the moment Allow-all is turned off.
+        # Persist helper for the allow-all switch + domain list. Saves the
+        # checkbox state (the mode) and the CURRENT textbox contents (always, so
+        # the list is never lost). Any failure is printed, not swallowed.
         def _persist(is_all, text):
             try:
-                update_web_access(cfg, policy, bool(is_all), (text or "").splitlines())
-            except Exception:
-                # Saving should not break the UI; a failed write leaves the
-                # in-memory setting applied and the file unchanged.
-                pass
+                saved_to = update_web_access(
+                    cfg, policy, bool(is_all), (text or "").splitlines())
+                print(f"[web_access] saved: allow_all={bool(is_all)} "
+                      f"domains={cfg.assistant.allow_domains} -> {saved_to}")
+            except Exception as e:  # noqa: BLE001
+                print(f"[web_access] SAVE FAILED: {type(e).__name__}: {e}")
 
-        # Toggling Allow-all: save immediately and enable/disable the list box
-        # WITHOUT changing its text (gr.update with no value leaves text as-is).
-        def _on_toggle(is_all, text):
+        # Toggling allow-all sets the mode: save, then grey/ungrey the domain box
+        # (its text is left as-is so the list is preserved). The box is editable
+        # only when web is enabled and allow-all is off.
+        def _on_toggle(is_all, text, enabled):
             _persist(is_all, text)
-            return gr.update(interactive=not is_all)
+            return gr.update(interactive=bool(enabled) and not bool(is_all))
         allow_all_cb.change(
-            _on_toggle, inputs=[allow_all_cb, domains_box], outputs=[domains_box],
-            queue=False,
+            _on_toggle, inputs=[allow_all_cb, domains_box, enable_web_cb],
+            outputs=[domains_box], queue=False,
         )
 
-        # Editing the list: save when focus leaves the box (blur) and on submit,
-        # rather than on every keystroke, so config.yaml is not rewritten on each
-        # character. Only meaningful when Allow-all is off, but saving while it is
-        # on is harmless (the list is stored empty either way).
+        # Editing the list saves on blur / submit (not each keystroke).
         def _on_domains(is_all, text):
             _persist(is_all, text)
         domains_box.blur(_on_domains, inputs=[allow_all_cb, domains_box], outputs=None, queue=False)
         domains_box.submit(_on_domains, inputs=[allow_all_cb, domains_box], outputs=None, queue=False)
+
+        # 3b. Search provider. Exactly one at a time (radio). Tavily is listed
+        # first (it is the default and works keyless). To add another provider
+        # later: implement it in search.py, allow its value in
+        # config.update_search_provider, and add a choice here.
+        gr.Markdown("**Search provider** (used when Aegis searches; pick one)")
+        provider_radio = gr.Radio(
+            choices=["Tavily", "DuckDuckGo"],
+            value=start_provider,
+            show_label=False,
+            interactive=start_enabled,
+        )
+        gr.Markdown(
+            "Tavily: works with no key (rate-limited); add a free key from "
+            "tavily.com for higher limits. DuckDuckGo: no key, often rate-limited."
+        )
+        tavily_key_box = gr.Textbox(
+            label="Tavily API key (optional - blank uses keyless mode)",
+            value=cfg.assistant.tavily_api_key or "",
+            type="password",
+            placeholder="tvly-...",
+            interactive=start_enabled,
+            visible=(start_provider == "Tavily"),
+        )
+
+        # Save provider + key together; a failure is printed, not swallowed.
+        def _save_provider(prov_label, key):
+            prov = "tavily" if prov_label == "Tavily" else "duckduckgo"
+            try:
+                saved_to = update_search_provider(cfg, prov, key or "")
+                print(f"[web_access] saved: search_provider={prov} "
+                      f"tavily_key={'set' if (key or '').strip() else 'empty'} "
+                      f"-> {saved_to}")
+            except Exception as e:  # noqa: BLE001
+                print(f"[web_access] SAVE FAILED (provider): {type(e).__name__}: {e}")
+
+        # Switching provider saves and shows the key box only for Tavily. The key
+        # box stays editable only while web is enabled.
+        def _on_provider(prov_label, key, enabled):
+            _save_provider(prov_label, key)
+            return gr.update(visible=(prov_label == "Tavily"),
+                             interactive=bool(enabled))
+        provider_radio.change(
+            _on_provider, inputs=[provider_radio, tavily_key_box, enable_web_cb],
+            outputs=[tavily_key_box], queue=False)
+
+        # Save the key on blur / submit (not each keystroke).
+        def _on_key(prov_label, key):
+            _save_provider(prov_label, key)
+        tavily_key_box.blur(_on_key, inputs=[provider_radio, tavily_key_box], outputs=None, queue=False)
+        tavily_key_box.submit(_on_key, inputs=[provider_radio, tavily_key_box], outputs=None, queue=False)
+
+        # MASTER SWITCH handler (wired last, once every sub-control exists).
+        # Saves allow_web_search, then greys/ungreys ALL controls below without
+        # changing their values, honoring the sub-rules (domain box only editable
+        # when allow-all is off; key box only visible for Tavily).
+        def _persist_enabled(enabled):
+            try:
+                saved_to = update_web_enabled(cfg, policy, bool(enabled))
+                print(f"[web_access] saved: allow_web_search={bool(enabled)} "
+                      f"-> {saved_to}")
+            except Exception as e:  # noqa: BLE001
+                print(f"[web_access] SAVE FAILED (enable): {type(e).__name__}: {e}")
+
+        def _on_enable(enabled, is_all, prov_label):
+            _persist_enabled(enabled)
+            en = bool(enabled)
+            return (
+                gr.update(interactive=en),                                  # allow_all_cb
+                gr.update(interactive=en and not bool(is_all)),             # domains_box
+                gr.update(interactive=en),                                  # provider_radio
+                gr.update(interactive=en, visible=(prov_label == "Tavily")),  # tavily_key_box
+            )
+        enable_web_cb.change(
+            _on_enable,
+            inputs=[enable_web_cb, allow_all_cb, provider_radio],
+            outputs=[allow_all_cb, domains_box, provider_radio, tavily_key_box],
+            queue=False,
+        )
 
 def launch_gui(agent_factory: Callable, subscribe_suggestions: Callable, contacts, kairos, inbox: MemoryInbox, graph: LWWGraph, sync_service: SyncService, broker: ConsentBroker = None, identity=None, trainer: LoRATrainer = None, style_adapter: StyleAdapter = None, model_names: list[str] = None, on_switch_model=None, cfg=None, policy=None):
     

@@ -24,6 +24,10 @@ assistant:
   proactive_enabled: false
   quiet_hours: [23, 7] # 11 PM to 7 AM
   suggestions_per_min: 5
+  # Master switch for web reading (the Web Access checkbox). true = allow any
+  # site (allow_domains below is ignored but kept for when you turn this off).
+  # false = restrict to allow_domains only.
+  allow_all_web: true
   allow_domains: ["wikipedia.org", "pypi.org", "python.org", "arxiv.org", "numpy.org", "pytorch.org"]
   # Distill user facts after each full-pipeline turn. Costs one extra LLM
   # generation per message, so it is OFF by default for responsiveness. Simple

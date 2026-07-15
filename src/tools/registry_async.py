@@ -33,12 +33,17 @@ class AsyncToolRegistry:
             "now": self._now,
             "calc": self._calc,
             "none": self._none,
-            "search_web": self._search_web if cfg.assistant.allow_web_search else self._blocked,
-            "research_web": self._research_web if cfg.assistant.allow_web_search else self._blocked,
-            "fetch_url": self._fetch_url if cfg.assistant.allow_web_search else self._blocked,
+            # Web tools are always registered; each checks the allow_web_search
+            # master switch live at call time (see _web_enabled), so toggling web
+            # access on/off in the UI takes effect immediately without rebuilding
+            # the registry. When the switch is off they return the disabled
+            # message (and the agent does not call them at all anyway).
+            "search_web": self._search_web,
+            "research_web": self._research_web,
+            "fetch_url": self._fetch_url,
             "kb_add": self._kb_add,
             "kb_query": self._kb_query,
-            "ingest_url": self._ingest_url if cfg.assistant.allow_web_search else self._blocked,
+            "ingest_url": self._ingest_url,
         }
 
         # Conditionally add code_exec
@@ -56,11 +61,18 @@ class AsyncToolRegistry:
     # when the one-time, per-session web-search consent gate applies.
     WEB_TOOLS = ("search_web", "research_web", "fetch_url", "ingest_url")
 
+    def _web_enabled(self) -> bool:
+        """True when the web-access MASTER switch (allow_web_search) is on. Read
+        live so the UI toggle takes effect immediately. When False, all web
+        tools refuse and web_open() is forced off."""
+        return bool(self.cfg.assistant.allow_web_search)
+
     def web_open(self) -> bool:
-        """True when 'Allow all sites' is on (the allow-domains list is empty),
-        meaning web tools may read any page without asking. When False, the
-        agent asks for one-time consent and only allowlisted domains are read."""
-        return not bool(self.cfg.assistant.allow_domains)
+        """True when the 'Allow all sites' master switch is on, meaning web
+        tools may read any page without asking. When False, only the domains in
+        allow_domains are readable and the agent asks one-time consent. Also
+        False whenever the web-access master switch is off (no web at all)."""
+        return self._web_enabled() and bool(self.cfg.assistant.allow_all_web)
 
     def consent_warning(self) -> str:
         """The message shown once per session before the first web search when
@@ -115,8 +127,12 @@ class AsyncToolRegistry:
             return f"Error: {e}"
 
     async def _search_web(self, a):
+        if not self._web_enabled():
+            return "Access disabled by configuration."
         q, k = str(a.get("query","")), int(a.get("k",5))
-        res = await asyncio.get_event_loop().run_in_executor(None, self.searcher.search, q, k)
+        res = await asyncio.get_event_loop().run_in_executor(
+            None, self.searcher.search, q, k,
+            self.cfg.assistant.search_provider, self.cfg.assistant.tavily_api_key)
         return json.dumps(res, ensure_ascii=False)
 
     async def _research_web(self, a):
@@ -129,32 +145,52 @@ class AsyncToolRegistry:
         answer with a citation. Pages blocked by the allowlist or that error out
         are still listed with their status, so the model can point the user to
         the page or explain why it could not be read."""
+        if not self._web_enabled():
+            return "Access disabled by configuration."
         q = str(a.get("query", ""))
         k = int(a.get("k", 4))
         if not q:
             return "Error: 'query' argument required."
         # 1. Search.
-        results = await asyncio.get_event_loop().run_in_executor(None, self.searcher.search, q, max(k, 3))
+        results = await asyncio.get_event_loop().run_in_executor(
+            None, self.searcher.search, q, max(k, 3),
+            self.cfg.assistant.search_provider, self.cfg.assistant.tavily_api_key)
         if not results:
             return ("No search results were returned (the search backend may be "
                     "temporarily rate-limited). Try rephrasing or ask again.")
         # 2. Fetch and distil the top results.
+        #
+        # Fetch the pages CONCURRENTLY, not one after another. Each fetch_text
+        # can take up to ~12s; doing k=4 of them sequentially can total ~48s and
+        # blow past the tool timeout (tool_timeout_sec, e.g. 20s), which cut the
+        # whole research call off and made the agent fall back to a stale memory
+        # answer. Running them in parallel makes the wall-clock ~= a single
+        # fetch, so all sources are actually read within the budget.
         loop = asyncio.get_event_loop()
+        top = list(enumerate(results[:k], 1))
+
+        async def _get_page(url: str) -> str:
+            """Return cached text if present, else fetch it (in a thread)."""
+            if not url:
+                return ""
+            if cached := self.cache.get(url):
+                return cached
+            page = await loop.run_in_executor(
+                None, fetch_text, url, "Aegis/1.0", self.cfg.assistant.allow_domains,
+                9000, self.cfg.assistant.allow_all_web)
+            if page and not page.startswith("[Blocked") and not page.startswith("[Error"):
+                self.cache.put(url, page)
+            return page
+
+        pages = await asyncio.gather(*[_get_page(r.get("url", "")) for _, r in top])
+
         parts = []
         read_count = 0
-        for i, r in enumerate(results[:k], 1):
+        for (i, r), page in zip(top, pages):
             url = r.get("url", "")
             title = r.get("title", "") or url
             snippet = r.get("snippet", "") or ""
-            page = ""
-            if url:
-                if cached := self.cache.get(url):
-                    page = cached
-                else:
-                    page = await loop.run_in_executor(
-                        None, fetch_text, url, "Aegis/1.0", self.cfg.assistant.allow_domains)
-                    if page and not page.startswith("[Blocked") and not page.startswith("[Error"):
-                        self.cache.put(url, page)
+            page = page or ""
             if page.startswith("[Blocked") or page.startswith("[Error"):
                 # Could not read the page; give the model the search snippet and
                 # the status so it can still point the user there.
@@ -170,10 +206,12 @@ class AsyncToolRegistry:
         return header + "\n\n".join(parts)
 
     async def _fetch_url(self, a):
+        if not self._web_enabled():
+            return "Access disabled by configuration."
         url = str(a.get("url",""))
         if cached := self.cache.get(url):
             return cached
-        text = await asyncio.get_event_loop().run_in_executor(None, fetch_text, url, "Aegis/1.0", self.cfg.assistant.allow_domains)
+        text = await asyncio.get_event_loop().run_in_executor(None, fetch_text, url, "Aegis/1.0", self.cfg.assistant.allow_domains, 9000, self.cfg.assistant.allow_all_web)
         self.cache.put(url, text)
         return text
 
@@ -187,6 +225,8 @@ class AsyncToolRegistry:
         return await asyncio.get_event_loop().run_in_executor(None, self.kb.retrieve_context, q, k)
 
     async def _ingest_url(self, a):
+        if not self._web_enabled():
+            return "Access disabled by configuration."
         url = str(a.get("url",""))
         text = self.cache.get(url)
         if not text:

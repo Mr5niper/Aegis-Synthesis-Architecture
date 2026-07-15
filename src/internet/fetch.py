@@ -4,19 +4,26 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 
 
-def _domain_allowed(url: str, allow_domains: list) -> bool:
+def _domain_allowed(url: str, allow_domains: list, allow_all: bool = False) -> bool:
+    if allow_all:
+        return True  # master switch on: any site may be opened
     if not allow_domains:
-        return True  # empty allowlist means "allow any" (the GUI 'Allow all sites')
+        # No master switch and no list: nothing is allowed. (Allow-all is now an
+        # explicit flag, not "empty list", so an empty list means "no sites".)
+        return False
     dom = urlparse(url).netloc.lower()
     return any(dom == ad or dom.endswith("." + ad) or dom.endswith(ad) for ad in allow_domains)
 
 
-def fetch_text(url: str, user_agent: str, allow_domains: list, max_chars: int = 9000) -> str:
+def fetch_text(url: str, user_agent: str, allow_domains: list, max_chars: int = 9000, allow_all: bool = False) -> str:
     """Fetch a page and return cleaned visible text, or a bracketed status
     string starting with '[Blocked' or '[Error' that the model can relay to the
-    user. Never raises for ordinary network/HTTP problems."""
+    user. Never raises for ordinary network/HTTP problems.
+
+    allow_all is the master switch: when True, any site may be opened and the
+    allow_domains list is ignored. When False, only allow_domains are opened."""
     dom = urlparse(url).netloc
-    if not _domain_allowed(url, allow_domains):
+    if not _domain_allowed(url, allow_domains, allow_all):
         return (f"[Blocked: '{dom}' is not in the allowed-domains list. Turn on "
                 f"'Allow all sites' in Web Access, or add this domain, to read it.]")
     try:
