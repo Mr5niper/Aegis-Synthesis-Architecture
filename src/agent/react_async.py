@@ -208,13 +208,17 @@ class ReActAgent:
         if history:
             tail = [t for t in history[-6:] if t.get("content")]
             recent = "\n".join(f"{t['role']}: {t['content']}" for t in tail)
+        now = _datetime.datetime.now()
         prompt = (
-            "Turn the user's latest message into ONE web search query that will "
-            "find what they are asking for right now. Use the recent conversation "
-            "ONLY to resolve references (like 'it', 'that', 'they', 'the last "
-            "game'); the query is about the LATEST message. Keep it to a few "
-            "keywords. Output ONLY the query -- no quotes, no label, no "
-            "explanation.\n\n"
+            f"Today is {now:%A, %B %d, %Y}. Turn the user's latest message into "
+            "ONE web search query that will find what they are asking for right "
+            "now. Use the recent conversation ONLY to resolve references (like "
+            "'it', 'that', 'they', 'the last game'); the query is about the "
+            "LATEST message. If it is about something current or most-recent (who "
+            f"won, latest, current, newest, this season's), put the year {now:%Y} "
+            "in the query so the results are up to date, not from an earlier year. "
+            "Keep it to a few keywords. Output ONLY the query -- no quotes, no "
+            "label, no explanation.\n\n"
             f"Recent conversation:\n{recent or '(none)'}\n\n"
             f"Latest message: {user}\n"
             "Search query:"
